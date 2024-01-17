@@ -65,7 +65,7 @@ This seems like it would be the most efficient approach. Again I don't know how 
 
 Approach_3 works backwards from AlphaMissense rather than forwards from the transcriptome. Instead of approximate mean and variance for the functional effects on each transcript, it would give absolute ones.
 
-1. Calculate the probability of every possible 'positionless' codon change from the approximated probabilities of each nucleotide subsittution.
+1. Calculate the probability of every possible 'positionless' codon change from the approximated probabilities of each nucleotide substitution.
 
 2. Use these data to calculate the probabilities of every possible 'positionless' amino acid change.
 
