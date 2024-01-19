@@ -42,7 +42,9 @@ This is bad because if the number of nucleotides in a transcript is divisible by
 
 I can further filter the canonical transcript list to include only transcripts with [CCDS](https://en.wikipedia.org/wiki/Consensus_CDS_Project)s. Then the canonical_full.tsv and canonical_partial.tsv files have the same number of transcripts and all of the transcript lengths are perfectly divisible by 3. These *probably* don't contain non-codons, but a lot of transcripts are dropped.
 
-A better solution to this is to grab the list of transcripts from the AlphaMissense dataset rather than Biomart, then double-check it.
+A better solution to this was to grab the list of transcripts from the AlphaMissense dataset rather than Biomart, then double-check it. Happily, it turns out the ["AlphaMissense_gene_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_gene_hg38.tsv.gz) dataset is actually a list of the transcripts they analysed rather than a list of genes.
+
+I re-ran the script. Not all of their IDs match the IDs from the current transcriptome. They've used a previous release. I did what I should've done in the first place and read their materials and methods. They've used Gencode [hg38v32](https://www.gencodegenes.org/human/release_32.html). All of their IDs match with this release, but the CDSs in the Gencode FASTA aren't proper CDSs. Beans!
 
 **AlphaMissense data**
 
