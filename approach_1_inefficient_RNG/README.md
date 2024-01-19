@@ -1,8 +1,52 @@
-### approach_1_inefficient_RNG
+## approach_1_inefficient_RNG
 
 This seems like the most straightforward intuitive approach. It's the one I'm going to try. I should be able to get it to work. It's probably the least computationally efficient, but with enough computing power that might not matter so much.
 
-**data generation**
+### source data preparation
+
+A list of canonical transcripts can be constructed with [this](https://www.ensembl.org/biomart/martview). The reference human transcriptome is available [here](https://ftp.ensembl.org/pub/release-111/fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz). The AlphaMissense datasets are available [here](https://console.cloud.google.com/storage/browser/dm_alphamissense;tab=objects?prefix=&forceOnObjectsSortingFiltering=false).
+
+**canonical transcript data**
+
+The minimal data for processing are a .tsv with transcript identifiers and sequences. I'm using canonical transcripts so that genes with lots of transcripts aren't overrepresented in the downstream analysis. Biomart doesn't like you to download lots of sequence data at once so I used it to download a list of identifiers for canonical transcripts (as of GRCh38.p14). For the identifiers, I used ENSEMBL 'Transcript stable ID version's so that I can check that they match the transcriptome, and the AlphaMissense data later.
+
+I downloaded the current sequences for the whole transcriptome as a FASTA. To extract the sequence data, match the transcript IDs to the canonical list, and generate the .tsv I want, I used the following R code:
+
+```R
+library(Biostrings)
+library(tidyverse)
+fasta <- readDNAStringSet("Homo_sapiens.GRCh38.cds.all.fa.gz")
+df <- tibble(ID=names(fasta), sequence=as.character(fasta))
+df2 <- as_tibble(df$ID %>% str_split(" ", simplify = TRUE))
+df$ID <- df2$V1
+mart <- read_csv("mart_export.csv")
+mart <- mart %>% subset(select=`Transcript stable ID version`) %>% rename_at('Transcript stable ID version', ~'ID')
+df <- mart %>% inner_join(df, by = "ID")
+write_tsv(df, "canonical_full.tsv")
+df <- df %>% filter(str_detect(sequence, "N", negate=TRUE))
+write_tsv(df, "canonical_partial.tsv")
+rm(list=ls())
+```
+I noticed that even among canonical transcripts, there are some that contain unspecified "N" nucleotides. This presents a problem because codons with Ns in can't be reliably interpreted. As a stopgap, I removed these in the 'canonical_partial.tsv'. However, a downstream workaround would be to record but not interpret these codons if they're substituted. That way, I wouldn't drop any source data unnecessarily.
+
+I wondered if Ns have been put at the start of transcripts to maintain them in frame, so I checked whether the lengths of the transcripts were divisible by 3 without a remainder with:
+
+```R
+df <- read_tsv("canonical_full.tsv")
+df$sequence_lengths <- str_length(df$sequence)
+df$remainder <- df$sequence_lengths %% 3
+```
+They weren't. I realised I should have been working with protein-coding transcripts only, so I downloaded a filtered-version of the canonical transcript list and re-ran the script. They still weren't. Rats!
+
+This is bad because if the number of nucleotides in a transcript is divisible by 3 without a remainder then not everything in that transcript is a codon. Worse, there may be other transcripts in the set containing non-codons whose lengths are perfectly divisible by three by chance.
+
+I can further filter the canonical transcript list to include only transcripts with [CCDS](https://en.wikipedia.org/wiki/Consensus_CDS_Project)s. Then the canonical_full.tsv and canonical_partial.tsv files have the same number of transcripts and all of the transcript lengths are perfectly divisible by 3. These *probably* don't contain non-codons, but a lot of transcripts are dropped.
+
+A better solution to this is to grab the list of transcripts from the AlphaMissense dataset rather than Biomart, then double-check it.
+
+**AlphaMissense data**
+
+### data generation
 
 1. Approximate the probability of inosine misincorporation in place of each other nucleotide with the data from the literature above.
 
@@ -12,7 +56,7 @@ This seems like the most straightforward intuitive approach. It's the one I'm go
 
 4. In case of a substitution(s) in a codon, capture the codons-sequence (original and substituted), its position in the transcript, and the transcript identifier. Save these data for each run-through of the transcriptome.
 
-**substitution effect**
+### substitution effect
 
 1. To transform the original and substituted codons into original and substituted amino acids I will initially assume that 'I' is interpreted as 'G'. This has been an assumption in the literature in the past. It means that determining original and substituted amino acids just requires [the genetic code](https://en.wikipedia.org/wiki/Genetic_code#/media/File:GeneticCode21-version-2.svg) as a lookup table.
 
@@ -20,10 +64,11 @@ This seems like the most straightforward intuitive approach. It's the one I'm go
 
 * In reality, 'I' may not always be interpreted as 'G'. [This](https://doi.org/10.1093%2Fnar%2Fgky1163) paper shows that. If I can get everything to work where 'I' is always interpreted as 'G', then I'll refine the code to include the possibility of alternative substitutions. The possibility of 'stalling changes' will also be considered. These possibilities will require another layer of iteration with a RNG.
 
-**substitution functional effect**
+### substitution functional effect
 
 1. With the defined amino acid changes per-run, the corresponding scores in AlphaMissense can be looked up (since the dataset contains every possible missense change).
 
 2. A first-pass metric for the 'per-transcript' effect will just be adding up the AlphaMissense scores for each transcript.
 
 3. After enough runs, the mean and variance for the predicted functional effect on each transcript should stabilise.
+
