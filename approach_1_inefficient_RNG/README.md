@@ -44,9 +44,44 @@ I can further filter the canonical transcript list to include only transcripts w
 
 A better solution to this was to grab the list of transcripts from the AlphaMissense dataset rather than Biomart, then double-check it. Happily, it turns out the ["AlphaMissense_gene_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_gene_hg38.tsv.gz) dataset is actually a list of the transcripts they analysed rather than a list of genes.
 
-I re-ran the script. Not all of their IDs match the IDs from the current transcriptome. They've used a previous release. I did what I should've done in the first place and read their materials and methods. They've used Gencode [hg38v32](https://www.gencodegenes.org/human/release_32.html). All of their IDs match with this release, but the CDSs in the Gencode FASTA aren't proper CDSs. Beans!
+I re-ran the script. Not all of their IDs match the IDs from the current transcriptome. They've used a previous release. I did what I should've done in the first place and read their materials and methods. They've used Gencode [hg38v32](https://www.gencodegenes.org/human/release_32.html). All of their IDs match with this release, but the CDSs in the Gencode FASTA aren't proper CDSs. The FASTA does contain coordinates for the CDSs, however. The CDSs can be extracted with:
+
+```R
+library(Biostrings)
+library(tidyverse)
+fasta <- readDNAStringSet("gencode.v32.pc_transcripts.fa.gz")
+df <- tibble(ID=names(fasta), sequence=as.character(fasta))
+df2 <- as_tibble(df$ID %>% str_split("\\|", simplify = TRUE))
+df3 <- df$ID %>% str_extract("\\|CDS:\\d+\\-\\d+\\|")
+df$start <- as.numeric(df3 %>% str_extract("\\|CDS:\\d+\\-") %>% str_extract("\\d+"))
+df$end <- as.numeric(df3 %>% str_extract("\\-\\d+\\|") %>% str_extract("\\d+"))
+df$ID <- df2$V1
+df$CDS <- df$sequence %>% str_sub(df$start, df$end)
+```
+Among the matches to AlphaMissense, there are no transcripts containing "N"s, but there are transcripts containing non-codons/partial-codons. Balls.
+
+The closest ENSMBL release to Gencode v32 is release 98. There's only 18 missing sequences and these would be easy to get. However, among the matches to AlphaMissense are transcripts containing "N"s and transcripts containing non-codons.
+
+In their paper, the AlphaMissense authors state they "generated predictions for every possible single amino acid substitution within each UniProt canonical isoform" and that this approach means "every genetic missense variant can be mapped to a UniProt protein variant, regardless of the genome build". Therefore, it would be good to re-map the UniProt canonical isoform IDs to the current transcriptome. For this I need the list of 'UniProt canonical isoform IDs' from Uniref release 90, I think.
+
+* Note: it seems like there are fewer 'UniProt canonical isoforms' than current ENSEMBL 'canonical protein-coding transcripts' (19233 vs. 23056). I'll update with a table at some point. Some of the missing ones may be in the ["AlphaMissense_isoforms_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_isoforms_hg38.tsv.gz) and ["AlphaMissense_isoforms_aa_substitutions.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_isoforms_aa_substitutions.tsv.gz) files. If they are, then it would be good to include these in the transcript list so that the source data is as complete as possible (and assemble a combined version of the prospective AlphaMissense lookup table accordingly). If they aren't, then it seems like it might be good to run translations of them through the AlphaMissense pipeline as an addition to the dataset (if one had an obscene amount of computing power at one's disposal).
+
+To do:
+1. Get Gencode hg38v32 CDSs matching gene list for 'good enough' transcript set.
+2. Remap Uniprot canonical release 90 to current transcriptome for a potentially 'better' transcript set.
+3. Compare and contrast.
+Also:
+4. See if any Uniprot noncanonical proteins in the AlphaMissense dataset are encoded by ENSEMBL canonical protein-coding transcripts. If they are, incorporate these into a 'more complete' transcript set.
+
+Welp, this is more involved than I thought it would be. 
 
 **AlphaMissense data**
+
+My laptop does not have enough RAM to open either the ["AlphaMissense_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_hg38.tsv.gz) or the ["AlphaMissense_aa_substitutions.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_aa_substitutions.tsv.gz) files in R.
+
+To do:
+1. Try to open these data in chunks.
+2. Spin-up an R environment in the cloud with more RAM and open them there.
 
 ### data generation
 
