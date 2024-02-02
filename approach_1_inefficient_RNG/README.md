@@ -8,7 +8,7 @@ A list of canonical transcripts can be constructed with [this](https://www.ensem
 
 **canonical transcript data**
 
-The minimal data for processing are a .tsv with transcript identifiers and sequences. I'm using canonical transcripts so that genes with lots of transcripts aren't overrepresented in the downstream analysis. Biomart doesn't like you to download lots of sequence data at once so I used it to download a list of identifiers for canonical transcripts (as of GRCh38.p14). For the identifiers, I used ENSEMBL 'Transcript stable ID version's so that I can check that they match the transcriptome, and the AlphaMissense data later.
+The minimal data for processing are a .tsv with transcript identifiers and sequences. I'm using canonical transcripts so that genes with lots of transcripts aren't overrepresented in the downstream analysis. Biomart doesn't like you to download lots of sequence data at once so I used it to download a list of identifiers for canonical transcripts (as of GRCh38.p14). For the identifiers, I used ENSEMBL 'Transcript stable ID version's so that I can check that they match the transcriptome, and the AlphaMissense data.
 
 I downloaded the current sequences for the whole transcriptome as a FASTA. To extract the sequence data, match the transcript IDs to the canonical list, and generate the .tsv I want, I used the following R code:
 
@@ -19,15 +19,15 @@ fasta <- readDNAStringSet("Homo_sapiens.GRCh38.cds.all.fa.gz")
 df <- tibble(ID=names(fasta), sequence=as.character(fasta))
 df2 <- as_tibble(df$ID %>% str_split(" ", simplify = TRUE))
 df$ID <- df2$V1
-mart <- read_csv("mart_export.csv")
+mart <- read_tsv("mart_export_protein_coding.tsv")
 mart <- mart %>% subset(select=`Transcript stable ID version`) %>% rename_at('Transcript stable ID version', ~'ID')
 df <- mart %>% inner_join(df, by = "ID")
+df <- df %>% distinct(.keep_all = TRUE)
 write_tsv(df, "canonical_full.tsv")
-df <- df %>% filter(str_detect(sequence, "N", negate=TRUE))
-write_tsv(df, "canonical_partial.tsv")
 rm(list=ls())
+# 22,082 transcripts
 ```
-I noticed that even among canonical transcripts, there are some that contain unspecified "N" nucleotides. This presents a problem because codons with Ns in can't be reliably interpreted. As a stopgap, I removed these in the 'canonical_partial.tsv'. However, a downstream workaround would be to record but not interpret these codons if they're substituted. That way, I wouldn't drop any source data unnecessarily.
+I noticed that even among canonical transcripts, there are some that contain unspecified "N" nucleotides. This presents a problem because codons with Ns in can't be reliably interpreted.
 
 I wondered if Ns have been put at the start of transcripts to maintain them in frame, so I checked whether the lengths of the transcripts were divisible by 3 without a remainder with:
 
@@ -36,15 +36,13 @@ df <- read_tsv("canonical_full.tsv")
 df$sequence_lengths <- str_length(df$sequence)
 df$remainder <- df$sequence_lengths %% 3
 ```
-They weren't. I realised I should have been working with protein-coding transcripts only, so I downloaded a filtered-version of the canonical transcript list and re-ran the script. They still weren't. Rats!
-
-This is bad because if the number of nucleotides in a transcript is divisible by 3 without a remainder then not everything in that transcript is a codon. Worse, there may be other transcripts in the set containing non-codons whose lengths are perfectly divisible by three by chance.
+They weren't. This is bad because if the number of nucleotides in a transcript is divisible by 3 without a remainder then not everything in that transcript is a codon. Worse, there may be other transcripts in the set containing non-codons whose lengths are perfectly divisible by three by chance.
 
 I can further filter the canonical transcript list to include only transcripts with [CCDS](https://en.wikipedia.org/wiki/Consensus_CDS_Project)s. Then the canonical_full.tsv and canonical_partial.tsv files have the same number of transcripts and all of the transcript lengths are perfectly divisible by 3. These *probably* don't contain non-codons, but a lot of transcripts are dropped.
 
 A better solution to this was to grab the list of transcripts from the AlphaMissense dataset rather than Biomart, then double-check it. Happily, it turns out the ["AlphaMissense_gene_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_gene_hg38.tsv.gz) dataset is actually a list of the transcripts they analysed rather than a list of genes.
 
-I re-ran the script. Not all of their IDs match the IDs from the current transcriptome. They've used a previous release. I did what I should've done in the first place and read their materials and methods. They've used Gencode [hg38v32](https://www.gencodegenes.org/human/release_32.html). All of their IDs match with this release, but the CDSs in the Gencode FASTA aren't proper CDSs. The FASTA does contain coordinates for the CDSs, however. The CDSs can be extracted with:
+I re-ran the script. Not all of their IDs match the IDs from the current transcriptome. They've used a previous release, Gencode [hg38v32](https://www.gencodegenes.org/human/release_32.html). All of their IDs match with this release, but the CDSs in the Gencode FASTA aren't proper CDSs. The FASTA does contain coordinates for the CDSs, however. The CDSs can be extracted with:
 
 ```R
 library(Biostrings)
@@ -58,30 +56,74 @@ df$end <- as.numeric(df3 %>% str_extract("\\-\\d+\\|") %>% str_extract("\\d+"))
 df$ID <- df2$V1
 df$CDS <- df$sequence %>% str_sub(df$start, df$end)
 ```
-Among the matches to AlphaMissense, there are no transcripts containing "N"s, but there are transcripts containing non-codons/partial-codons. Balls.
+In their paper, the AlphaMissense authors state they "generated predictions for every possible single amino acid substitution within each UniProt canonical isoform" and that this approach means "every genetic missense variant can be mapped to a UniProt protein variant, regardless of the genome build".
 
-The closest ENSMBL release to Gencode v32 is release 98. There's only 18 missing sequences and these would be easy to get. However, among the matches to AlphaMissense are transcripts containing "N"s and transcripts containing non-codons.
+It would be better to use the up-to-date ENSEMBL canonical transcriptome rather than the older Gencode hg38v32 transcriptome. Therefore, I remapped the 'Ensembl canonical' transcripts to Uniprot with the tool available [here](https://www.uniprot.org/id-mapping). To do this, I first had to get a list of Uniprot IDs to map. These weren't in the ["AlphaMissense_gene_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_gene_hg38.tsv.gz) file but were in the larger ["AlphaMissense_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_hg38.tsv.gz) file. I initially had some difficulties opening this, but was able to do so at the cost of maxxing-out my pagefile and depositing a series of giant tempfiles on my HDD over the course of several crashes. I made a list of Uniprot IDs with:
 
-In their paper, the AlphaMissense authors state they "generated predictions for every possible single amino acid substitution within each UniProt canonical isoform" and that this approach means "every genetic missense variant can be mapped to a UniProt protein variant, regardless of the genome build". Therefore, it would be good to re-map the UniProt canonical isoform IDs to the current transcriptome. For this I need the list of 'UniProt canonical isoform IDs' from Uniref release 90, I think.
+```R
+library(tidyverse)
+am_canonical <- read_tsv("AlphaMissense_hg38.tsv.gz", comment = "#", col_names = FALSE, col_select = c(6,7,8,9))
+am_canonical <- am_canonical %>% rename("uniprot_ID" = "X6", "ID" = "X7", "change" = "X8", "score" = "X9")
+id_list <- am_canonical %>% group_by(uniprot_ID, ID) %>% group_keys()
+# 19,233 transcripts
+uniprot_id_list <- id_list$uniprot_ID
+uniprot_id_list <- unique(uniprot_id_list)
+write_tsv(as_tibble(uniprot_id_list), "uniprot_id_list.tsv")
+# 19,117 Uniprot IDs
+```
 
-* Note: it seems like there are fewer 'UniProt canonical isoforms' than current ENSEMBL 'canonical protein-coding transcripts' (19233 vs. 23056). I'll update with a table at some point. Some of the missing ones may be in the ["AlphaMissense_isoforms_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_isoforms_hg38.tsv.gz) and ["AlphaMissense_isoforms_aa_substitutions.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_isoforms_aa_substitutions.tsv.gz) files. If they are, then it would be good to include these in the transcript list so that the source data is as complete as possible (and assemble a combined version of the prospective AlphaMissense lookup table accordingly). If they aren't, then it seems like it might be good to run translations of them through the AlphaMissense pipeline as an addition to the dataset (if one had an obscene amount of computing power at one's disposal).
+There are a few more transcript IDs than Uniprot IDs indicating that some distinct transcripts encode the same protein. These are probably transcripts from duplicated genes.
 
-To do:
-1. Get Gencode hg38v32 CDSs matching gene list for 'good enough' transcript set.
-2. Remap Uniprot canonical release 90 to current transcriptome for a potentially 'better' transcript set.
-3. Compare and contrast.
-Also:
-4. See if any Uniprot noncanonical proteins in the AlphaMissense dataset are encoded by ENSEMBL canonical protein-coding transcripts. If they are, incorporate these into a 'more complete' transcript set.
+Remapping with the [Uniprot tool](https://www.uniprot.org/id-mapping) resulted in 49,328 hits. These probably include instances where both canonical and noncanonical transcripts from the same gene encode the same protein. 18,902 of the 19,117 Uniprot IDs mapped. 215 Uniprot IDs did not map.
 
-Welp, this is more involved than I thought it would be. 
+I matched the mapped IDs with the Ensembl canonical IDs with:
+
+```R
+library(tidyverse)
+canonical_mapped <- read_tsv("idmapping.tsv.gz")
+canonical_mapped <- dplyr::rename(canonical_mapped, "uniprot_ID" = "From", "ID" = "To")
+am_mapped_to_ensembl_canonical <- df %>% inner_join(canonical_mapped, by = "ID")
+# 18,033 of 18,902 Uniprot IDs matched to 19,948 of 22,802 Ensembl canonical IDs
+```
+
+The multiple matches for some Uniprot IDs are again probably because distinct transcripts from duplicated genes encode the same protein. The Uniprot IDs that mapped to Ensembl IDs but don't match to Ensembl canonical IDs are probably mapped to proteins encoded by noncanonical transcripts, but I should check this. If there are proteins encoded by noncanonical transcripts in the AlphaMissense "canonical" set, it follows that there may be proteins encoded by canonical transcripts in the AlphaMissense "isoforms" set.
+
+I checked for duplicate Ensembl canonical IDs in the matched list with:
+
+```R
+library(tidyverse)
+am_mapped_to_ensembl_canonical_tally <- am_mapped_to_ensembl_canonical %>% group_by(ID) %>% tally()
+# 19,943 of 19,948 Ensembl canonical IDs are unique
+```
+
+It turns out that a few of the Uniprot IDs have now been merged and so I removed the few entries with obsolete Uniprot IDs:
+
+```R
+library(tidyverse)
+obsolete_ids <- c("Q32Q52", "Q8IXS6", "Q5VZT2", "Q9UPP5", "Q6ZW33")
+am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% filter(!uniprot_ID %in% obsolete_ids)
+# 18,033 Uniprot IDs matched to 19,943 Ensembl canonical IDs
+```
+
+I checked the 215 Uniprot IDs from AlphaMissense that did not map at all manually. The list can be generated with:
+
+```R
+library(tidyverse)
+am_uniprot_unmatched <- id_list %>% anti_join(canonical_mapped, by = "uniprot_ID")
+# 218 Uniprot IDs, 215 unique
+```
+
+It turns out that these are in three groups:
+
+1. **121 'non-proteins'**. These are Uniprot identifiers for proteins that were thought to be real proteins but are not any more. They include artifacts, products of pseudogenes, lncRNAs, dubious gene predictions, dubious CDSs, etc. Corresponding entries will be removed from the AlphaMissense reference set to be constructed.
+2. **69 'changed-proteins'**. These are Uniprot identifiers for proteins that are now thought to contain a different number of amino acids. Because the AlphaMissense scoring was done on a protein with the "wrong" number of amino acids, corresponding entries will also be removed from the AlphaMissense reference set to be constructed. However, the new Uniprot identifiers for the new proteins of the "correct" length can be used to produce a list of "real" proteins that could be re-run through the AlphaMissense pipeline to add to that dataset in future.
+3. **25 'proteins that seem perfectly fine'**. These didn't map with the [Uniprot tool](https://www.uniprot.org/id-mapping) but are of the expected lengths and do seem to map to Ensembl canonical transcripts. These can be added to the `am_mapped_to_ensembl_canonical` set.
+
+
 
 **AlphaMissense data**
 
-My laptop does not have enough RAM to open either the ["AlphaMissense_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_hg38.tsv.gz) or the ["AlphaMissense_aa_substitutions.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_aa_substitutions.tsv.gz) files in R.
 
-To do:
-1. Try to open these data in chunks.
-2. Spin-up an R environment in the cloud with more RAM and open them there.
 
 ### data generation
 
