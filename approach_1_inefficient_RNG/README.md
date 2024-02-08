@@ -8,7 +8,21 @@ A list of canonical transcripts can be constructed with [this](https://www.ensem
 
 **canonical transcript data**
 
-The minimal data for processing are a .tsv with transcript identifiers and sequences. I'm using canonical transcripts so that genes with lots of transcripts aren't overrepresented in the downstream analysis. Biomart doesn't like you to download lots of sequence data at once so I used it to download a list of identifiers for canonical transcripts (as of GRCh38.p14). For the identifiers, I used ENSEMBL 'Transcript stable ID version's so that I can check that they match the transcriptome, and the AlphaMissense data.
+The minimal data for processing are a .tsv with transcript identifiers and sequences. I'm using canonical transcripts so that genes with lots of transcripts aren't overrepresented in the downstream analysis. Biomart doesn't like you to download lots of sequence data at once so I used it to download a list of identifiers for canonical transcripts (as of GRCh38.p14). For the identifiers, I used Ensembl 'Transcript stable ID version's so that I can check that they match the transcriptome, and the AlphaMissense data.
+
+I didn't realise this initially, but the Ensembl canonical set includes transcripts from genes on scaffolds as well as transcripts from genes on chromosomes. I excluded the scaffold-transcripts as these are probably duplicates.
+
+Note: I am excluding transcripts from the mitochondrial genome (though there are only 13). These are a special case because mitochondria have their own transcription and translation machinery. Some mitochondrial transcript codons are translated differently as compared to the same codon in a typical mRNA. Therefore, mitochondrial transcript substitutions would have to be analysed differently. I have saved them for later in case they'd be useful.
+
+```R
+library(tidyverse)
+mart <- read_tsv("mart_export_with_chr.tsv")
+mart <- mart %>% select(`Transcript stable ID version`, `Chromosome/scaffold name`) %>% rename_at('Transcript stable ID version', ~'ID')
+mart$scaf <- mart$`Chromosome/scaffold name` %>% str_detect("^[X|Y]|^[0-9]{1,2}", negate = TRUE)
+mart <- mart %>% filter(mart$scaf == FALSE)
+mart <- mart %>% subset(select=`ID`)
+# 19,689 transcripts
+```
 
 I downloaded the current sequences for the whole transcriptome as a FASTA. To extract the sequence data, match the transcript IDs to the canonical list, and generate the .tsv I want, I used the following R code:
 
@@ -19,14 +33,12 @@ fasta <- readDNAStringSet("Homo_sapiens.GRCh38.cds.all.fa.gz")
 df <- tibble(ID=names(fasta), sequence=as.character(fasta))
 df2 <- as_tibble(df$ID %>% str_split(" ", simplify = TRUE))
 df$ID <- df2$V1
-mart <- read_tsv("mart_export_protein_coding.tsv")
-mart <- mart %>% subset(select=`Transcript stable ID version`) %>% rename_at('Transcript stable ID version', ~'ID')
 df <- mart %>% inner_join(df, by = "ID")
 df <- df %>% distinct(.keep_all = TRUE)
 write_tsv(df, "canonical_full.tsv")
-rm(list=ls())
-# 22,082 transcripts
+# 19,689 transcripts
 ```
+
 I noticed that even among canonical transcripts, there are some that contain unspecified "N" nucleotides. This presents a problem because codons with Ns in can't be reliably interpreted.
 
 I wondered if Ns have been put at the start of transcripts to maintain them in frame, so I checked whether the lengths of the transcripts were divisible by 3 without a remainder with:
@@ -58,7 +70,7 @@ df$CDS <- df$sequence %>% str_sub(df$start, df$end)
 ```
 In their paper, the AlphaMissense authors state they "generated predictions for every possible single amino acid substitution within each UniProt canonical isoform" and that this approach means "every genetic missense variant can be mapped to a UniProt protein variant, regardless of the genome build".
 
-It would be better to use the up-to-date ENSEMBL canonical transcriptome rather than the older Gencode hg38v32 transcriptome. Therefore, I remapped the 'Ensembl canonical' transcripts to Uniprot with the tool available [here](https://www.uniprot.org/id-mapping). To do this, I first had to get a list of Uniprot IDs to map. These weren't in the ["AlphaMissense_gene_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_gene_hg38.tsv.gz) file but were in the larger ["AlphaMissense_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_hg38.tsv.gz) file. I initially had some difficulties opening this, but was able to do so at the cost of maxxing-out my pagefile and depositing a series of giant tempfiles on my HDD over the course of several crashes. I made a list of Uniprot IDs with:
+It would be better to use the up-to-date ENSEMBL canonical transcriptome rather than the older Gencode hg38v32 transcriptome. Therefore, I remapped the Uniprot IDs to 'Ensembl canonical' transcript IDs  with the tool available [here](https://www.uniprot.org/id-mapping). To do this, I first had to get a list of Uniprot IDs to map. These weren't in the ["AlphaMissense_gene_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_gene_hg38.tsv.gz) file but were in the larger ["AlphaMissense_hg38.tsv.gz"](https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_hg38.tsv.gz) file. I initially had some difficulties opening this, but was able to do so at the cost of maxxing-out my pagefile and depositing a series of giant tempfiles on my HDD over the course of several crashes. I made a list of Uniprot IDs with:
 
 ```R
 library(tidyverse)
@@ -81,28 +93,21 @@ I matched the mapped IDs with the Ensembl canonical IDs with:
 ```R
 library(tidyverse)
 canonical_mapped <- read_tsv("idmapping.tsv.gz")
+# 18,902 of 19,117 Uniprot IDs mapped
 canonical_mapped <- dplyr::rename(canonical_mapped, "uniprot_ID" = "From", "ID" = "To")
 am_mapped_to_ensembl_canonical <- df %>% inner_join(canonical_mapped, by = "ID")
-# 18,033 of 18,902 Uniprot IDs matched to 19,948 of 22,802 Ensembl canonical IDs
+# 17,996 of 18,902 mapped Uniprot IDs matched to 18,120 of 19,689 Ensembl canonical IDs
 ```
 
 The multiple matches for some Uniprot IDs are again probably because distinct transcripts from duplicated genes encode the same protein. The Uniprot IDs that mapped to Ensembl IDs but don't match to Ensembl canonical IDs are probably mapped to proteins encoded by noncanonical transcripts, but I should check this. If there are proteins encoded by noncanonical transcripts in the AlphaMissense "canonical" set, it follows that there may be proteins encoded by canonical transcripts in the AlphaMissense "isoforms" set.
 
-I checked for duplicate Ensembl canonical IDs in the matched list with:
-
-```R
-library(tidyverse)
-am_mapped_to_ensembl_canonical_tally <- am_mapped_to_ensembl_canonical %>% group_by(ID) %>% tally()
-# 19,943 of 19,948 Ensembl canonical IDs are unique
-```
-
-It turns out that a few of the Uniprot IDs have now been merged and so I removed the few entries with obsolete Uniprot IDs:
+I checked for duplicate Ensembl canonical IDs in the matched list. It turns out that a few of the Uniprot IDs have now been merged and so I removed the few entries with obsolete Uniprot IDs:
 
 ```R
 library(tidyverse)
 obsolete_ids <- c("Q32Q52", "Q8IXS6", "Q5VZT2", "Q9UPP5", "Q6ZW33")
 am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% filter(!uniprot_ID %in% obsolete_ids)
-# 18,033 Uniprot IDs matched to 19,943 Ensembl canonical IDs
+# 18,120 rows for 18,120 Ensembl canonical IDs
 ```
 
 I checked the 215 Uniprot IDs from AlphaMissense that did not map at all manually. The list can be generated with:
@@ -110,7 +115,7 @@ I checked the 215 Uniprot IDs from AlphaMissense that did not map at all manuall
 ```R
 library(tidyverse)
 am_uniprot_unmatched <- id_list %>% anti_join(canonical_mapped, by = "uniprot_ID")
-# 218 Uniprot IDs, 215 unique
+# 215 Uniprot IDs
 ```
 
 It turns out that these are in three groups:
@@ -119,10 +124,77 @@ It turns out that these are in three groups:
 2. **69 'changed-proteins'**. These are Uniprot identifiers for proteins that are now thought to contain a different number of amino acids. Because the AlphaMissense scoring was done on a protein with the "wrong" number of amino acids, corresponding entries will also be removed from the AlphaMissense reference set to be constructed. However, the new Uniprot identifiers for the new proteins of the "correct" length can be used to produce a list of "real" proteins that could be re-run through the AlphaMissense pipeline to add to that dataset in future.
 3. **25 'proteins that seem perfectly fine'**. These didn't map with the [Uniprot tool](https://www.uniprot.org/id-mapping) but are of the expected lengths and do seem to map to Ensembl canonical transcripts. These can be added to the `am_mapped_to_ensembl_canonical` set.
 
+To do the addition, I used:
+
+```R
+library(tidyverse)
+perfectly_fine_proteins <- read_csv("perfectly_fine_proteins.csv")
+perfectly_fine_proteins <- perfectly_fine_proteins %>% rename("ID" = "new_ID", "uniprot_ID" = "am_uniprot_ID")
+perfectly_fine_proteins <- df %>% inner_join(perfectly_fine_proteins, by = "ID") %>% select('ID', 'sequence', 'uniprot_ID')
+am_mapped_to_ensembl_canonical <- rows_insert(am_mapped_to_ensembl_canonical, perfectly_fine_proteins)
+# 18,144 transcripts; 24 added (one is only on a scaffold)
+```
+
+Checking the `am_mapped_to_ensembl_canonical` set for sequences containing "N"s showed that none did. Checking the set for transcripts with lengths not divisible by three without a remainder identified only 5 transcripts. 4 were transcripts with incomplete CDSs that are still the canonical transcripts for genes.I chose to truncate the non-coding 3' nucleotides with:
+
+```R
+library(tidyverse)
+am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000506619.2"] <- str_sub(am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000506619.2"], 1, end = -3)
+am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000434431.2"] <- str_sub(am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000434431.2"], 1, end = -3)
+am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000621907.1"] <- str_sub(am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000621907.1"], 1, end = -2)
+am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000636699.1"] <- str_sub(am_mapped_to_ensembl_canonical$sequence[am_mapped_to_ensembl_canonical$ID == "ENST00000636699.1"], 1, end = -2)
+# points for a nicer way to do this
+```
+
+I also removed one transcript for a non-functional immunoglobulin:
+
+```R
+library(tidyverse)
+am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% filter(!ID == "ENST00000569103.2")
+#18,143 transcripts
+```
+
+I checked the 'start' and 'stop' codons of the remaining transcripts. Start codons are usually 'ATG' but sometimes 'CTG' or 'TTG'. Whatever the codon, they always encode methionine, but that won't matter downstream because substituted start codons will be considered differently (as possible start-loss variants). They won't be checked against AlphaMissense. 'Stop' codons are 'TGA', 'TAG' and 'TAA'.
+
+```R
+am_mapped_to_ensembl_canonical$start_codon <- am_mapped_to_ensembl_canonical$sequence %>% str_detect("^ATG|^CTG|^TTG")
+am_mapped_to_ensembl_canonical$stop_codon <- am_mapped_to_ensembl_canonical$sequence %>% str_detect("TGA$|TAG$|TAA$")
+no_start <- am_mapped_to_ensembl_canonical %>% filter(start_codon == FALSE)
+write_tsv(no_start, "no_start.tsv")
+no_stop <- am_mapped_to_ensembl_canonical %>% filter(stop_codon == FALSE)
+write_tsv(no_stop, "no_stop.tsv")
+```
+
+7 transcripts had unusual start codons and 4 had no stop codon, but after checking them I'm keeping all of these in the reference set.
+
+
 
 
 **AlphaMissense data**
 
+The AlphaMissense data are of two types each split into two sets. The two types are:
+
+1. Scores for every amino acid change that it is possible to produce with a single nucleotide change.
+2. Scores for every possible amino acid change at every position.
+
+The latter, much larger, data are preferable as they can interpret the effects of rare edge-cases such as the effects more than one simulated nucleotide substitution affecting the same codon. However, it may take much longer to search through these. Therefore, it would be good to prepare both types for flexibility.
+
+The two sets are:
+
+1. Scores for 'canonical' proteins. However, these contain both proteins encoded by Ensembl canonical transcripts and proteins not encoded by Ensembl canonical transcripts. The existing IDs for these are Uniprot IDs.
+2. Scores for 'isoforms'. However, these contain both proteins encoded by Ensembl canonical transcripts and proteins not encoded by Ensembl canonical transcripts. The existing IDs for these are old Ensembl IDs.
+
+To make the AlphaMissense reference set I will:
+
+* Filter type 1&2 and set 1&2 to contain only proteins encoded by Ensembl canonical transcripts.
+* Replace the previous IDs with the most recent Ensembl canonical IDs.
+* Combine set 1&2 into a single set.
+
+
+**Checking**
+
+* Make sure there is a 1:1 correspondence between Ensembl IDs in the prepared transcript set and the prepared AlphaMissense set.
+* Make sure that the transcripts included in the prepared transcript set encode proteins of the lengths of the proteins in the prepared AlphaMissense set.
 
 
 ### data generation
@@ -150,4 +222,3 @@ It turns out that these are in three groups:
 2. A first-pass metric for the 'per-transcript' effect will just be adding up the AlphaMissense scores for each transcript.
 
 3. After enough runs, the mean and variance for the predicted functional effect on each transcript should stabilise.
-
