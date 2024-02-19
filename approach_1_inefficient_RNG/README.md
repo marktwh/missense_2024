@@ -44,6 +44,7 @@ I noticed that even among canonical transcripts, there are some that contain uns
 I wondered if Ns have been put at the start of transcripts to maintain them in frame, so I checked whether the lengths of the transcripts were divisible by 3 without a remainder with:
 
 ```R
+library(tidyverse)
 df <- read_tsv("canonical_full.tsv")
 df$sequence_lengths <- str_length(df$sequence)
 df$remainder <- df$sequence_lengths %% 3
@@ -157,18 +158,147 @@ am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% filter(!ID 
 I checked the 'start' and 'stop' codons of the remaining transcripts. Start codons are usually 'ATG' but sometimes 'CTG' or 'TTG'. Whatever the codon, they always encode methionine, but that won't matter downstream because substituted start codons will be considered differently (as possible start-loss variants). They won't be checked against AlphaMissense. 'Stop' codons are 'TGA', 'TAG' and 'TAA'.
 
 ```R
+library(tidyverse)
 am_mapped_to_ensembl_canonical$start_codon <- am_mapped_to_ensembl_canonical$sequence %>% str_detect("^ATG|^CTG|^TTG")
 am_mapped_to_ensembl_canonical$stop_codon <- am_mapped_to_ensembl_canonical$sequence %>% str_detect("TGA$|TAG$|TAA$")
 no_start <- am_mapped_to_ensembl_canonical %>% filter(start_codon == FALSE)
 write_tsv(no_start, "no_start.tsv")
 no_stop <- am_mapped_to_ensembl_canonical %>% filter(stop_codon == FALSE)
 write_tsv(no_stop, "no_stop.tsv")
+#18,143 transcripts
 ```
 
 7 transcripts had unusual start codons and 4 had no stop codon, but after checking them I'm keeping all of these in the reference set.
 
+There are 1,546 Ensembl canonical transcripts that the Uniprot IDs from the AlphaMissense 'canonical' set did not match to. It was possible some of these were in the AlphaMissense 'isoforms' sets. Unfortunately, the 'isoforms' sets have Ensembl IDs rather than Uniprot IDs. To fully open the files and generate lists of these IDs, it was necessary to use a VM in the cloud with 64GB of RAM. Strangely, the "AlphaMissense_isoforms_hg38.tsv.gz" file contained data for 63,099 while the "AlphaMissense_isoforms_aa_substitutions.tsv.gz" file contained data for an additional 13.
 
+```R
+library(tidyverse)
+am_isoforms <- read_tsv("AlphaMissense_isoforms_hg38.tsv.gz", comment = "#", col_select = c(6), col_names = FALSE)
+am_isoforms <- unique(am_isoforms)
+am_isoforms <- rename(am_isoforms, "ID" = "X6")
+write_tsv(am_isoforms, "am_isoforms_list.tsv")
+am_isoforms_full <- read_tsv("AlphaMissense_isoforms_aa_substitutions.tsv.gz", comment = "#", col_select = c(1))
+am_isoforms_full <- unique(am_isoforms_full)
+am_isoforms <- rename(am_isoforms_full, "ID" = "transcript_id")
+write_tsv(am_isoforms_full, "am_isoforms_full_list.tsv")
+#VM with 64GB RAM
+#63,099 transcripts in "AlphaMissense_isoforms_hg38.tsv.gz"
+#63,112 transcripts in "AlphaMissense_isoforms_aa_substitutions.tsv.gz"
+```
 
+To match the Ensembl IDs from the Ensembl 'canonical' set to the IDs from the 'isoforms' sets, I converted the 'transcript stable IDs with version' to just 'transcript stable IDs'. I matched with these.
+
+This yielded 1,224 matches. The matches included some very long transcripts encoding very large proteins. These may be particularly relevant in the planned analyses.
+
+```R
+library(tidyverse)
+canonical_missing <- df %>% filter(!ID %in% am_mapped_to_ensembl_canonical$ID)
+canonical_missing$short_ID <- canonical_missing$ID %>% str_extract("ENST\\d+")
+am_isoforms_full_list$short_ID <- am_isoforms_full_list$ID %>% str_extract("ENST\\d+")
+canonical_missing_matched <- canonical_missing %>% inner_join(am_isoforms_full_list, by = "short_ID")
+canonical_missing_matched <- canonical_missing_matched %>% rename("ID" = "ID.x", "am_ID" = "ID.y")
+# 1,224 transcripts
+```
+
+None of these transcripts contained "N"s. However, 86 contained non-codons and/or lacked a conventional start codon and/or lacked a conventional start codon. I checked these manually. A high proportion were incomplete 'novel transcript's encoding 'novel protein'. Nevertheless, I'll keep them in the reference set. I truncated non-coding 3' nucleotides where appropriate with:
+
+```R
+library(tidyverse)
+clip_1 <- read_csv("clip_1.csv")
+clip_2 <- read_csv("clip_2.csv")
+canonical_missing_matched <- canonical_missing_matched %>%
+  mutate(sequence = ifelse(ID %in% clip_1$ID, str_sub(sequence, 1, end = -2), sequence))
+canonical_missing_matched <- canonical_missing_matched %>%
+  mutate(sequence = ifelse(ID %in% clip_2$ID, str_sub(sequence, 1, end = -3), sequence))
+# thanks to Pierfrancesco Butti
+```
+
+Unexpectedly, whilst checking, I found the data from the "AlphaMissense_isoforms_aa_substitutions.tsv.gz" file contained data for multiple versions of the same transcript in some cases. I removed the duplicates manually leaving the most recent version numbers.
+
+```R
+dupes <- read_csv("dupes.csv")
+canonical_missing_matched <- canonical_missing_matched %>% filter(!am_ID %in% dupes$ID)
+# 1,166 transcripts
+```
+
+The "AlphaMissense_hg38.tsv.gz" and "AlphaMissense_aa_substitutions" datasets were purported to contain data on the exact-same proteins. Just with more amino acid changes scored in the "AlphaMissense_aa_substitutions" set. However, as I had found that there were fewer proteins in the "AlphaMissense_isoforms_hg38.tsv.gz" set than the "AlphaMissense_isoforms_aa_substitutions.tsv.gz" set, I checked this:
+
+```R
+library(tidyverse)
+am_canonical_full <- read_tsv("AlphaMissense_aa_substitutions.tsv.gz", comment = "#", col_select = c(1))
+am_canonical_full <- unique(am_canonical_full)
+am_canonical <- read_tsv("AlphaMissense_hg38.tsv.gz", comment = "#", col_names = FALSE, col_select = c(6,7,8,9))
+am_canonical <- am_canonical %>% rename("uniprot_ID" = "X6", "ID" = "X7", "change" = "X8", "score" = "X9")
+id_list <- am_canonical %>% group_by(uniprot_ID, ID) %>% group_keys()
+am_canonical_full <- am_canonical_full %>% rename("uniprot_ID" = "ID")
+more_missing <- am_canonical_full %>% anti_join(id_list, by = "uniprot_ID")
+write_tsv (more_missing, "more_missing.tsv")
+# 1,399 additional Uniprot IDs
+```
+
+There were 1,399 additional Uniprot IDs in the "AlphaMissense_aa_substitutions" set, 1,222 of which mapped to Ensembl transcripts. However, only 282 of these mapped to Ensembl canonical transcripts. Of that 282, 278 were among those canonical transcripts that had not been matched to anything yet. The small overlap was due to obsolete IDs.
+
+```R
+library(tidyverse)
+more_missing <- read_tsv("more_missing.tsv")
+more_missing_mapped <- read_tsv("extra_idmapping_2024_02_14.tsv")
+more_missing_mapped <- dplyr::rename(more_missing_mapped, "uniprot_ID" = "From", "ID" = "To")
+more_missing_mapped_to_ensembl_canonical <- df %>% inner_join(more_missing_mapped, by = "ID")
+ensembl_canonical_unmatched <- df %>% anti_join(am_mapped_to_ensembl_canonical, by = "ID")
+ensembl_canonical_unmatched <- unique(ensembl_canonical_unmatched)
+more_missing_mapped_to_ensembl_unmatched <- ensembl_canonical_unmatched %>% inner_join(more_missing_mapped, by = "ID")
+discrepancy <- more_missing_mapped_to_ensembl_canonical %>% anti_join(more_missing_mapped_to_ensembl_unmatched, by = "ID")
+rm1 <- c("ENST00000410005.2", "ENST00000291552.9")
+am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% filter(!ID %in% rm1)
+rm2 <- c("ENST00000450895.2", "ENST00000291554.6")
+more_missing_mapped_to_ensembl_canonical <- more_missing_mapped_to_ensembl_canonical %>% filter(!ID %in% rm2)
+# 280 transcripts
+```
+
+Of these, one transcript contained "N"s and was removed. One had no start codon but was kept.
+
+```R
+library(tidyverse)
+more_missing_mapped_to_ensembl_canonical$sequence_lengths <- str_length(more_missing_mapped_to_ensembl_canonical$sequence)
+more_missing_mapped_to_ensembl_canonical$remainder <- more_missing_mapped_to_ensembl_canonical$sequence_lengths %% 3
+more_missing_mapped_to_ensembl_canonical$start_codon <- more_missing_mapped_to_ensembl_canonical$sequence %>% str_detect("^ATG|^CTG|^TTG")
+more_missing_mapped_to_ensembl_canonical$stop_codon <- more_missing_mapped_to_ensembl_canonical$sequence %>% str_detect("TGA$|TAG$|TAA$")
+no_start <- more_missing_mapped_to_ensembl_canonical %>% filter(start_codon == FALSE)
+no_stop <- more_missing_mapped_to_ensembl_canonical %>% filter(stop_codon == FALSE)
+more_missing_mapped_to_ensembl_canonical <- more_missing_mapped_to_ensembl_canonical %>% filter(!ID == "ENST00000477973.5")
+# 279 transcripts
+```
+
+There was substantial overlap between the 'more_missing_mapped_to_ensembl_canonical' set and the 'canonical_missing_matched' sets indicating that there's some overlap in the content of the original AlphaMissense 'canonical' and 'isoforms' sets. However, I won't remove the overlapping transcripts from either 'more_missing_mapped_to_ensembl_canonical' or 'canonical_missing_matched'. These will be removed when the data are merged, and similarly removed when the AlphaMissense reference datasets are created.
+
+```R
+library(tidyverse)
+no_overlap <- more_missing_mapped_to_ensembl_canonical %>% filter(!ID %in% canonical_missing_matched$ID)
+# 102 of 279 transcripts
+```
+
+I combined the extra transcripts with 'am_mapped_to_ensembl_canonical':
+
+```R
+library(tidyverse)
+am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% select(`ID`, `sequence`, `uniprot_ID`)
+more_missing_mapped_to_ensembl_canonical <- more_missing_mapped_to_ensembl_canonical %>% select(`ID`, `sequence`, `uniprot_ID`)
+am_mapped_to_ensembl_canonical <- rows_insert(am_mapped_to_ensembl_canonical, more_missing_mapped_to_ensembl_canonical)
+# 18,420 transcripts
+```
+
+So that's 18,420 transcripts to match with the AlphaMissense 'canonical' sets and 1,166 to match with the 'isoforms' sets, though there's some overlap. I made the reference set with:
+
+```R
+library(tidyverse)
+am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% select(`ID`, `sequence`)
+canonical_missing_matched <- canonical_missing_matched %>% select(`ID`, `sequence`)
+reference_transcripts_full <- rows_insert(am_mapped_to_ensembl_canonical, canonical_missing_matched, conflict = "ignore")
+reference_transcripts_full <- unique(reference_transcripts_full)
+write_tsv(reference_transcripts_full, "reference_transcripts_full.tsv")
+# 19,409 transcripts
+```
 
 **AlphaMissense data**
 
@@ -177,18 +307,89 @@ The AlphaMissense data are of two types each split into two sets. The two types 
 1. Scores for every amino acid change that it is possible to produce with a single nucleotide change.
 2. Scores for every possible amino acid change at every position.
 
-The latter, much larger, data are preferable as they can interpret the effects of rare edge-cases such as the effects more than one simulated nucleotide substitution affecting the same codon. However, it may take much longer to search through these. Therefore, it would be good to prepare both types for flexibility.
+The latter, much larger, data are preferable as they can interpret the effects of rare edge-cases such as the effects more than one simulated nucleotide substitution affecting the same codon. However, it may take much longer to search through these. Therefore, it would be good to prepare both types for flexibility. Note: from preparing the 
 
 The two sets are:
 
 1. Scores for 'canonical' proteins. However, these contain both proteins encoded by Ensembl canonical transcripts and proteins not encoded by Ensembl canonical transcripts. The existing IDs for these are Uniprot IDs.
 2. Scores for 'isoforms'. However, these contain both proteins encoded by Ensembl canonical transcripts and proteins not encoded by Ensembl canonical transcripts. The existing IDs for these are old Ensembl IDs.
 
-To make the AlphaMissense reference set I will:
+To make the AlphaMissense reference set I:
 
 * Filter type 1&2 and set 1&2 to contain only proteins encoded by Ensembl canonical transcripts.
+
+```R
+library(tidyverse)
+am_canonical_full <- read_tsv("AlphaMissense_aa_substitutions.tsv.gz", comment = "#")
+am_canonical_full <- unique(am_canonical_full)
+am_canonical_full <- am_canonical_full %>% rename("uniprot_ID" = "uniprot_id", "change" = "protein_variant", "score" = "am_pathogenicity")
+am_mapped_to_ensembl_canonical <- read_tsv("am_mapped_to_ensembl_canonical.tsv")
+am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% select(`ID`, `uniprot_ID`)
+am_canonical_full <- am_mapped_to_ensembl_canonical %>% left_join(am_canonical_full, by = "uniprot_ID")
+# "AlphaMissense_aa_substitutions.tsv.gz"
+am_canonical <- read_tsv("AlphaMissense_hg38.tsv.gz", comment = "#", col_names = FALSE, col_select = c(6,8,9))
+am_canonical <- unique(am_canonical)
+am_canonical <- am_canonical %>% rename("uniprot_ID" = "X6", "change" = "X8", "score" = "X9")
+am_mapped_to_ensembl_canonical <- am_mapped_to_ensembl_canonical %>% select(`ID`, `uniprot_ID`)
+am_canonical <- am_mapped_to_ensembl_canonical %>% left_join(am_canonical, by = "uniprot_ID")
+#"AlphaMissense_hg38.tsv.gz"
+am_isoforms_full <- read_tsv("AlphaMissense_isoforms_aa_substitutions.tsv.gz", comment = "#")
+canonical_missing_matched <- canonical_missing_matched %>% select(`ID`, `am_ID`)
+am_isoforms_full <- am_isoforms_full %>% rename("am_ID" = "transcript_id", "change" = "protein_variant", "score" = "am_pathogenicity")
+am_isoforms_full <- canonical_missing_matched %>% left_join(am_isoforms_full, by = "am_ID")
+# "AlphaMissense_isoforms_aa_substitutions.tsv.gz"
+am_isoforms <- read_tsv("AlphaMissense_isoforms_hg38.tsv.gz", comment = "#", col_names = FALSE, col_select = c(6, 7, 8))
+am_isoforms <- am_isoforms %>% rename("am_ID" = "X6", "change" = "X7", "score" = "X8")
+am_isoforms <- canonical_missing_matched %>% left_join(am_isoforms, by = "am_ID")
+# "AlphaMissense_isoforms_hg38.tsv.gz"
+# VM with 128GB RAM
+```
+
 * Replace the previous IDs with the most recent Ensembl canonical IDs.
+
+```R
+library(tidyverse)
+am_canonical_full <- am_canonical_full %>% select(`ID`, `change`, `score`)
+am_canonical_full <- unique(am_canonical_full)
+am_canonical_full <- am_canonical_full %>% drop_na(score)
+write_tsv(am_canonical_full, "am_canonical_full.tsv.gz")
+# "AlphaMissense_aa_substitutions.tsv.gz"
+am_canonical <- am_canonical %>% select(`ID`, `change`, `score`)
+am_canonical <- unique(am_canonical)
+am_canonical <- am_canonical %>% drop_na(score)
+write_tsv(am_canonical, "am_canonical.tsv.gz")
+#"AlphaMissense_hg38.tsv.gz"
+am_isoforms_full <- am_isoforms_full %>% select(`ID`, `change`, `score`)
+am_isoforms_full <- unique(am_isoforms_full)
+am_isoforms_full <- am_isoforms_full %>% drop_na(score)
+write_tsv(am_isoforms_full, "am_isoforms_full.tsv.gz")
+# "AlphaMissense_isoforms_aa_substitutions.tsv.gz"
+am_isoforms <- am_isoforms %>% select(`ID`, `change`, `score`)
+am_isoforms <- unique(am_isoforms)
+am_isoforms <- am_isoforms %>% drop_na(score)
+write_tsv(am_isoforms, "am_isoforms.tsv.gz")
+# "AlphaMissense_isoforms_hg38.tsv.gz"
+# VM with 128GB RAM
+```
+
 * Combine set 1&2 into a single set.
+
+```R
+library(tidyverse)
+am_isoforms_full <- read_tsv("am_isoforms_full.tsv.gz")
+am_full <- rows_insert(am_canonical_full, am_isoforms_full, conflict = "ignore")
+write_tsv(am_full, "am_full.tsv.gz")
+# full set (2)
+am_canonical <- read_tsv("am_canonical.tsv.gz")
+am_isoforms <- read_tsv("am_isoforms.tsv.gz")
+am <- rows_insert(am_canonical, am_isoforms, conflict = "ignore")
+write_tsv(am, "am.tsv.gz")
+# partial set (1)
+# VM with 128GB RAM
+```
+
+* am contains 19,302 transcripts and 65,052,376 changes
+* am_full contains 19,409 transcripts and 212,067,740 changes
 
 
 **Checking**
@@ -196,6 +397,438 @@ To make the AlphaMissense reference set I will:
 * Make sure there is a 1:1 correspondence between Ensembl IDs in the prepared transcript set and the prepared AlphaMissense set.
 * Make sure that the transcripts included in the prepared transcript set encode proteins of the lengths of the proteins in the prepared AlphaMissense set.
 
+In order to extract amino acid lengths of proteins and their sequences from the AlphaMissense data I used the following. Note here that amino acid lengths are given by 'max' amino acid numbers rather than by counting amino acids per protein. This is because come of the proteins start at amino acid position '1' and some at position '2'.
+
+```R
+library(tidyverse)
+am_full <- read_tsv("am_full.tsv.gz")
+am_full$aa_no <- am_full$change %>% str_extract("\\d+")
+am_full$ref_aa <- am_full$change %>% str_extract("[^0-9]+")
+am_full <- am_full %>% select(`ID`, `aa_no`, `ref_aa`)
+am_full <- unique(am_full)
+am_full <- am_full %>% transform(aa_no = as.numeric(am_full$aa_no))
+am_full_protein_length <- am_full %>%
+  group_by(ID) %>%
+  filter(aa_no == max(aa_no)) %>%
+  select(`ID`, `aa_no`) %>%
+  rename("amino_acids" = "aa_no")
+write_tsv(am_full_protein_length, "am_full_protein_length.tsv")
+am_full <- arrange_all(am_full)
+am_full_protein_sequence <- am_full %>%
+  group_by(ID) %>%
+  mutate(ref_aa = paste0(ref_aa, collapse = "")) %>%
+  rename("aa_sequence" = "ref_aa") %>%
+  select(`ID`, `aa_sequence`)
+am_full_protein_sequence <- unique(am_full_protein_sequence)
+am_full_protein_details <- am_full_protein_sequence %>% inner_join(am_full_protein_length, by = "ID")
+am_full_protein_details <- unique(am_full_protein_details)
+am_full_protein_details$seq_length <- str_length(am_full_protein_details$aa_sequence)
+am_full_protein_details <- am_full_protein_details %>%
+  mutate(comparison = ifelse(amino_acids == seq_length, TRUE, FALSE))
+write_tsv(am_full_protein_details, "am_full_protein_details.tsv")
+#am_full_protein_details; 19,409 proteins
+am <- read_tsv("am.tsv.gz")
+am$aa_no <- am$change %>% str_extract("\\d+")
+am$ref_aa <- am$change %>% str_extract("[^0-9]+")
+am <- am %>% select(`ID`, `aa_no`, `ref_aa`)
+am <- unique(am)
+am <- am %>% transform(aa_no = as.numeric(am$aa_no))
+am_protein_length <- am %>%
+  group_by(ID) %>%
+  filter(aa_no == max(aa_no)) %>%
+  select(`ID`, `aa_no`) %>%
+  rename("amino_acids" = "aa_no")
+write_tsv(am_protein_length, "am_protein_length.tsv")
+am <- arrange_all(am)
+am_protein_sequence <- am %>%
+  group_by(ID) %>%
+  mutate(ref_aa = paste0(ref_aa, collapse = "")) %>%
+  rename("aa_sequence" = "ref_aa") %>%
+  select(`ID`, `aa_sequence`)
+am_protein_sequence <- unique(am_protein_sequence)
+am_protein_details <- am_protein_sequence %>% inner_join(am_protein_length, by = "ID")
+am_protein_details <- unique(am_protein_details)
+am_protein_details$seq_length <- str_length(am_protein_details$aa_sequence)
+am_protein_details <- am_protein_details %>%
+  mutate(comparison = ifelse(amino_acids == seq_length, TRUE, FALSE))
+write_tsv(am_protein_details, "am_protein_details.tsv")
+# am_protein_details; 19,302 proteins
+# VM with 128GB RAM
+```
+
+To get the number of codons in the Ensembl reference sequences and compare these with the protein data I used the following. Note that I checked for stop codons and removed these, as they are not translated into amino acids.
+
+```R
+library(tidyverse)
+coding_length <- reference_transcripts_full
+coding_length$stop_codon <- coding_length$sequence %>% str_detect("TGA$|TAG$|TAA$")
+coding_length <- coding_length %>%
+  mutate(sequence = ifelse(stop_codon == TRUE, str_sub(sequence, 1, end = -4), sequence))
+coding_length$codons <- str_length(coding_length$sequence) / 3
+am_full_protein_details <- read_tsv("am_full_protein_details.tsv")
+comparison <- coding_length %>% inner_join(am_full_protein_details, by = "ID")
+comparison <- comparison %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch <- comparison %>% filter(comparison == FALSE)
+# In the full set, 18,223 transcripts matched to 19,409 proteins. 1,186 did not.
+am_protein_details <- read_tsv("am_protein_details.tsv")
+comparison2 <- coding_length %>% inner_join(am_protein_details, by = "ID")
+comparison2 <- comparison2 %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch2 <- comparison2 %>% filter(comparison == FALSE)
+# In the partial set, 18,115 transcripts matched to 19,302 proteins. 1,147 did not.
+```
+
+1,186 of the transcript lengths in the full set did not match to corresponding protein lengths. Because I had previously found missing transcripts in the 'isoforms' sets, I searched them for the *mismatched* transcripts. For the full set:
+
+```R
+library(tidyverse)
+am_isoforms_full_list <- read_tsv("am_isoforms_full_list.tsv")
+am_isoforms_full_list<- am_isoforms_full_list %>% rename("ID" = "transcript_id")
+am_isoforms_full_list$short_ID <- am_isoforms_full_list$ID %>% str_extract("ENST\\d+")
+mismatch$short_ID <- mismatch$ID %>% str_extract("ENST\\d+")
+mismatch_isoforms <- mismatch %>% inner_join(am_isoforms_full_list, by = "short_ID")
+mismatch_isoforms <- mismatch_isoforms %>% rename("ID" = "ID.x", "am_ID" = "ID.y")
+write_tsv(mismatch_isoforms, "mismatch_isoforms.tsv")
+# 1,036 of the 1,186 mismatched transcript IDs match to IDs in the full 'isoforms' set.
+am_isoforms_full <- read_tsv("AlphaMissense_isoforms_aa_substitutions.tsv.gz", comment = "#")
+mismatch_isoforms <- read_tsv("mismatch_isoforms.tsv")
+mismatch_isoforms <- mismatch_isoforms %>% select(`ID`, `am_ID`)
+am_isoforms_full <- am_isoforms_full %>% rename("am_ID" = "transcript_id", "change" = "protein_variant", "score" = "am_pathogenicity")
+am_isoforms_full <- mismatch_isoforms %>% left_join(am_isoforms_full, by = "am_ID")
+am_isoforms_full <- am_isoforms_full %>% select(`ID`, `change`, `score`)
+am_isoforms_full <- unique(am_isoforms_full)
+am_isoforms_full <- am_isoforms_full %>% drop_na(score)
+am_isoforms_full_rematched <- am_isoforms_full
+write_tsv(am_isoforms_full_rematched, "am_isoforms_full_rematched.tsv")
+rm(am_isoforms_full_rematched)
+am_isoforms_full$aa_no <- am_isoforms_full$change %>% str_extract("\\d+")
+am_isoforms_full$ref_aa <- am_isoforms_full$change %>% str_extract("[^0-9]+")
+am_isoforms_full <- am_isoforms_full %>% select(`ID`, `aa_no`, `ref_aa`)
+am_isoforms_full <- unique(am_isoforms_full)
+am_isoforms_full <- am_isoforms_full %>% transform(aa_no = as.numeric(am_isoforms_full$aa_no))
+mismatch_protein_length <- am_isoforms_full %>%
+  group_by(ID) %>%
+  filter(aa_no == max(aa_no)) %>%
+  select(`ID`, `aa_no`) %>%
+  rename("amino_acids" = "aa_no")
+am_isoforms_full <- arrange_all(am_isoforms_full)
+mismatch_protein_sequence <- am_isoforms_full %>%
+  group_by(ID) %>%
+  mutate(ref_aa = paste0(ref_aa, collapse = "")) %>%
+  rename("aa_sequence" = "ref_aa") %>%
+  select(`ID`, `aa_sequence`)
+mismatch_protein_sequence <- unique(mismatch_protein_sequence)
+mismatch_protein_details <- mismatch_protein_sequence %>% inner_join(mismatch_protein_length, by = "ID")
+mismatch_protein_details <- unique(mismatch_protein_details)
+# 1,015 protein sequences generated from the 1,036 matched IDs
+reference_transcripts_full <- read_tsv("reference_transcripts_full.tsv")
+coding_length <- reference_transcripts_full
+coding_length$stop_codon <- coding_length$sequence %>% str_detect("TGA$|TAG$|TAA$")
+coding_length <- coding_length %>%
+  mutate(sequence = ifelse(stop_codon == TRUE, str_sub(sequence, 1, end = -4), sequence))
+coding_length$codons <- str_length(coding_length$sequence) / 3
+comparison <- coding_length %>% inner_join(mismatch_protein_details, by = "ID")
+comparison <- comparison %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch <- comparison %>% filter(comparison == FALSE)
+am_isoforms_full_rematched_to_add <- comparison %>% filter(comparison == TRUE)
+write_tsv(am_isoforms_full_rematched_to_add, "am_isoforms_full_rematched_to_add.tsv")
+# clear workspace
+am_isoforms_full_rematched <- read_tsv("am_isoforms_full_rematched.tsv")
+am_isoforms_full_rematched_to_add <- read_tsv("am_isoforms_full_rematched_to_add")
+# 962 of the 1,015 protein sequences are of the appropriate lengths
+# VM with 128GB RAM
+```
+
+For the partial set:
+
+```R
+library(tidyverse)
+am_protein_details <- read_tsv("am_protein_details.tsv")
+comparison2 <- coding_length %>% inner_join(am_protein_details, by = "ID")
+comparison2 <- comparison2 %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch2 <- comparison2 %>% filter(comparison == FALSE)
+am_isoforms_list <- read_tsv("am_isoforms_list.tsv")
+am_isoforms_ist<- am_isoforms_list %>% rename("ID" = "transcript_id")
+am_isoforms_list$short_ID <- am_isoforms_list$ID %>% str_extract("ENST\\d+")
+mismatch2$short_ID <- mismatch2$ID %>% str_extract("ENST\\d+")
+mismatch_isoforms2 <- mismatch2 %>% inner_join(am_isoforms_list, by = "short_ID")
+write_tsv(mismatch_isoforms2, "mismatch_isoforms2.tsv")
+# 998 of the 1,147 mismatched transcript IDs match to IDs in the partial 'isoforms' set.
+am_isoforms <- read_tsv("AlphaMissense_isoforms_hg38.tsv.gz", comment = "#", col_names = FALSE, col_select = c(6, 7, 8))
+am_isoforms <- am_isoforms %>% rename("am_ID" = "X6", "change" = "X7", "score" = "X8")
+mismatch_isoforms2 <- read_tsv("mismatch_isoforms2.tsv")
+mismatch_isoforms2 <- mismatch_isoforms2 %>% rename("ID" = "ID.x", "am_ID" = "ID.y")
+mismatch_isoforms2 <- mismatch_isoforms2 %>% select(`ID`, `am_ID`)
+am_isoforms <- am_isoforms %>% rename("am_ID" = "transcript_id", "change" = "protein_variant", "score" = "am_pathogenicity")
+am_isoforms <- mismatch_isoforms2 %>% left_join(am_isoforms, by = "am_ID")
+am_isoforms <- am_isoforms %>% select(`ID`, `change`, `score`)
+am_isoforms <- unique(am_isoforms)
+am_isoforms <- am_isoforms %>% drop_na(score)
+am_isoforms_rematched <- am_isoforms
+write_tsv(am_isoforms_rematched, "am_isoforms_rematched.tsv")
+rm(am_isoforms_rematched)
+am_isoforms$aa_no <- am_isoforms$change %>% str_extract("\\d+")
+am_isoforms$ref_aa <- am_isoforms$change %>% str_extract("[^0-9]+")
+am_isoforms <- am_isoforms %>% select(`ID`, `aa_no`, `ref_aa`)
+am_isoforms <- unique(am_isoforms)
+am_isoforms <- am_isoforms %>% transform(aa_no = as.numeric(am_isoforms$aa_no))
+mismatch_protein_length <- am_isoforms %>%
+  group_by(ID) %>%
+  filter(aa_no == max(aa_no)) %>%
+  select(`ID`, `aa_no`) %>%
+  rename("amino_acids" = "aa_no")
+am_isoforms <- arrange_all(am_isoforms)
+mismatch_protein_sequence <- am_isoforms %>%
+  group_by(ID) %>%
+  mutate(ref_aa = paste0(ref_aa, collapse = "")) %>%
+  rename("aa_sequence" = "ref_aa") %>%
+  select(`ID`, `aa_sequence`)
+mismatch_protein_sequence <- unique(mismatch_protein_sequence)
+mismatch_protein_details <- mismatch_protein_sequence %>% inner_join(mismatch_protein_length, by = "ID")
+mismatch_protein_details <- unique(mismatch_protein_details)
+# 980 protein sequences generated from the 998 matched IDs
+reference_transcripts_full <- read_tsv("reference_transcripts_full.tsv")
+coding_length <- reference_transcripts_full
+coding_length$stop_codon <- coding_length$sequence %>% str_detect("TGA$|TAG$|TAA$")
+coding_length <- coding_length %>%
+  mutate(sequence = ifelse(stop_codon == TRUE, str_sub(sequence, 1, end = -4), sequence))
+coding_length$codons <- str_length(coding_length$sequence) / 3
+comparison <- coding_length %>% inner_join(mismatch_protein_details, by = "ID")
+comparison <- comparison %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch <- comparison %>% filter(comparison == FALSE)
+am_isoforms_rematched_to_add <- comparison %>% filter(comparison == TRUE)
+write_tsv(am_isoforms_rematched_to_add, "am_isoforms_rematched_to_add.tsv")
+# clear workspace
+am_isoforms_rematched <- read_tsv("am_isoforms_rematched.tsv")
+am_isoforms_rematched_to_add <- read_tsv("am_isoforms_rematched_to_add.tsv")
+am_isoforms_rematched_to_add <- am_isoforms_rematched_to_add %>% select(ID)
+am_isoforms_rematched_to_add <- am_isoforms_rematched_to_add %>% inner_join(am_isoforms_rematched, by = "ID")
+write_tsv(am_isoforms_rematched_to_add, "am_isoforms_rematched_to_add.tsv")
+# 844 of the 980 protein sequences are of the appropriate lengths
+# VM with 128GB RAM
+```
+
+A substantial fraction of the proteins with the wrong numbers of amino acids in the initial versions of the combined AlphaMissense data were found with the "correct" numbers of amino acids in the 'isoforms' sets. To remove the mismatched protein data and replace it with the data that matched from the 'isoforms' sets, I used:
+
+```R
+library(tidyverse)
+mismatch <- read_tsv("mismatch.tsv")
+am_full <- read_tsv("am_full.tsv.gz")
+am_isoforms_full_rematched_to_add <- read_tsv("am_isoforms_full_rematched_to_add.tsv")
+am_full <- am_full %>% filter(!ID %in% mismatch$ID)
+am_full <- rows_insert(am_full, am_isoforms_full_rematched_to_add)
+write_tsv(am_full, "am_full.tsv.gz")
+# 210,270,379 variants
+mismatch2 <- read_tsv("mismatch2.tsv")
+am <- read_tsv("am.tsv.gz")
+am_isoforms_rematched_to_add <- read_tsv("am_isoforms_rematched_to_add.tsv")
+am <- am %>% filter(!ID %in% mismatch2$ID)
+am <- rows_insert(am, am_isoforms_rematched_to_add)
+write_tsv(am, "am.tsv.gz")
+# 64,274,881 variants
+# VM with 128GB RAM
+```
+
+I rechecked the updated data to make sure it was okay:
+
+```R
+library(tidyverse)
+am_full <- read_tsv("am_full.tsv.gz")
+am_full$aa_no <- am_full$change %>% str_extract("\\d+")
+am_full$ref_aa <- am_full$change %>% str_extract("[^0-9]+")
+am_full <- am_full %>% select(`ID`, `aa_no`, `ref_aa`)
+am_full <- unique(am_full)
+am_full <- am_full %>% transform(aa_no = as.numeric(am_full$aa_no))
+am_full_protein_length <- am_full %>%
+  group_by(ID) %>%
+  filter(aa_no == max(aa_no)) %>%
+  select(`ID`, `aa_no`) %>%
+  rename("amino_acids" = "aa_no")
+am_full <- arrange_all(am_full)
+am_full_protein_sequence <- am_full %>%
+  group_by(ID) %>%
+  mutate(ref_aa = paste0(ref_aa, collapse = "")) %>%
+  rename("aa_sequence" = "ref_aa") %>%
+  select(`ID`, `aa_sequence`)
+am_full_protein_sequence <- unique(am_full_protein_sequence)
+am_full_protein_details <- am_full_protein_sequence %>% inner_join(am_full_protein_length, by = "ID")
+am_full_protein_details <- unique(am_full_protein_details)
+am_full_protein_details$seq_length <- str_length(am_full_protein_details$aa_sequence)
+am_full_protein_details <- am_full_protein_details %>%
+  mutate(comparison = ifelse(amino_acids == seq_length, TRUE, FALSE))
+reference_transcripts_full <- read_tsv("reference_transcripts_full.tsv")
+coding_length <- reference_transcripts_full
+coding_length$stop_codon <- coding_length$sequence %>% str_detect("TGA$|TAG$|TAA$")
+coding_length <- coding_length %>%
+  mutate(sequence = ifelse(stop_codon == TRUE, str_sub(sequence, 1, end = -4), sequence))
+coding_length$codons <- str_length(coding_length$sequence) / 3
+comparison <- coding_length %>% inner_join(am_full_protein_details, by = "ID")
+comparison <- comparison %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch <- comparison %>% filter(comparison == FALSE)
+# full data; 19,185 transcripts matching proteins of appropriate lengths
+am <- read_tsv("am.tsv.gz")
+am$aa_no <- am$change %>% str_extract("\\d+")
+am$ref_aa <- am$change %>% str_extract("[^0-9]+")
+am <- am %>% select(`ID`, `aa_no`, `ref_aa`)
+am <- unique(am)
+am <- am %>% transform(aa_no = as.numeric(am$aa_no))
+am_protein_length <- am %>%
+  group_by(ID) %>%
+  filter(aa_no == max(aa_no)) %>%
+  select(`ID`, `aa_no`) %>%
+  rename("amino_acids" = "aa_no")
+am <- arrange_all(am)
+am_protein_sequence <- am %>%
+  group_by(ID) %>%
+  mutate(ref_aa = paste0(ref_aa, collapse = "")) %>%
+  rename("aa_sequence" = "ref_aa") %>%
+  select(`ID`, `aa_sequence`)
+am_protein_sequence <- unique(am_protein_sequence)
+am_protein_details <- am_protein_sequence %>% inner_join(am_protein_length, by = "ID")
+am_protein_details <- unique(am_protein_details)
+am_protein_details$seq_length <- str_length(am_protein_details$aa_sequence)
+am_protein_details <- am_protein_details %>%
+  mutate(comparison = ifelse(amino_acids == seq_length, TRUE, FALSE))
+reference_transcripts_full <- read_tsv("reference_transcripts_full.tsv")
+coding_length <- reference_transcripts_full
+coding_length$stop_codon <- coding_length$sequence %>% str_detect("TGA$|TAG$|TAA$")
+coding_length <- coding_length %>%
+  mutate(sequence = ifelse(stop_codon == TRUE, str_sub(sequence, 1, end = -4), sequence))
+coding_length$codons <- str_length(coding_length$sequence) / 3
+comparison <- coding_length %>% inner_join(am_protein_details, by = "ID")
+comparison <- comparison %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch <- comparison %>% filter(comparison == FALSE)
+# Partial data; 18,999 transcripts matching proteins of appropriate lengths
+# VM with 128GB RAM
+```
+
+At this point, 19,689  Ensembl canonical transcripts had been matched to 19,185 and 18,999 proteins in the AlphaMissense complete and partial datasets, respectively. The 'canonical' AlphaMissense proteins were matched by Ensembl IDs mapped from Uniprot IDs. The 'isoforms' AlphaMissense proteins were matched by Ensembl IDs from which version numbers were removed. The only IDs that had not been cross-checked to the 19,689  Ensembl canonical transcripts were the Ensembl IDs given in the "AlphaMissense_hg38.tsv.gz" set. Therefore, I cross-checked these against the few missing ones:
+
+```R
+library(tidyverse)
+df <- read_tsv("df.tsv")
+df$short_ID <- df$ID %>% str_extract("ENST\\d+")
+am_full <- read_tsv("am_full.tsv.gz")
+am_full <- am_full %>% select(ID)
+am_full <- unique(am_full)
+am_full$short_ID <- am_full$ID %>% str_extract("ENST\\d+")
+hg38_canonical <- read_tsv("AlphaMissense_hg38.tsv.gz", comment = "#", col_names = FALSE, col_select = c(6,7,8,9))
+hg38_canonical <- hg38_canonical %>% rename("uniprot_ID" = "X6", "am_ID" = "X7", "change" = "X8", "score" = "X9")
+hg38_ensembl_IDs <- hg38_canonical %>% select(am_ID)
+hg38_ensembl_IDs <- unique(hg38_ensembl_IDs)
+hg38_ensembl_IDs$short_ID <- hg38_ensembl_IDs$am_ID %>% str_extract("ENST\\d+")
+hg38_ensembl_IDs_not_in_full <- hg38_ensembl_IDs %>% anti_join(am_full, by = "short_ID")
+matches1 <- hg38_ensembl_IDs_not_in_full %>% inner_join(df, by = "short_ID")
+matches1 <- matches1 %>% filter(!ID == "ENST00000569103.2")
+matches1 <- matches1 %>% select(`ID`, `am_ID`, `sequence`)
+coding_length <- matches1
+coding_length$stop_codon <- coding_length$sequence %>% str_detect("TGA$|TAG$|TAA$")
+coding_length <- coding_length %>%
+  mutate(sequence = ifelse(stop_codon == TRUE, str_sub(sequence, 1, end = -4), sequence))
+coding_length$codons <- str_length(coding_length$sequence) / 3
+am <- hg38_canonical
+am$aa_no <- am$change %>% str_extract("\\d+")
+am$ref_aa <- am$change %>% str_extract("[^0-9]+")
+am <- am %>% select(`am_ID`, `aa_no`, `ref_aa`)
+am <- unique(am)
+am <- am %>% transform(aa_no = as.numeric(am$aa_no))
+am_protein_length <- am %>%
+  group_by(am_ID) %>%
+  filter(aa_no == max(aa_no)) %>%
+  select(`am_ID`, `aa_no`) %>%
+  rename("amino_acids" = "aa_no")
+am <- arrange_all(am)
+am_protein_sequence <- am %>%
+  group_by(am_ID) %>%
+  mutate(ref_aa = paste0(ref_aa, collapse = "")) %>%
+  rename("aa_sequence" = "ref_aa") %>%
+  select(`am_ID`, `aa_sequence`)
+am_protein_sequence <- unique(am_protein_sequence)
+am_protein_details <- am_protein_sequence %>% inner_join(am_protein_length, by = "am_ID")
+am_protein_details <- unique(am_protein_details)
+am_protein_details$seq_length <- str_length(am_protein_details$aa_sequence)
+comparison <- coding_length %>% inner_join(am_protein_details, by = "am_ID")
+comparison <- comparison %>%
+  mutate(comparison = ifelse(codons == amino_acids, TRUE, FALSE))
+mismatch <- comparison %>% filter(comparison == FALSE)
+hg38_rematched_to_add <- comparison %>% filter(comparison == TRUE)
+write_tsv(hg38_rematched_to_add, "hg38_rematched_to_add.tsv")
+# 24 additional transcripts and proteins to add to 'full' set
+# VM with 128GB RAM
+```
+
+To add the 24 additional transcripts to the full set, I used:
+
+```R
+library(tidyverse)
+am_full <- read_tsv("am_full.tsv.gz")
+hg38_rematched_to_add <- read_tsv("hg38_rematched_to_add.tsv")
+hg38_canonical <- read_tsv("AlphaMissense_hg38.tsv.gz", comment = "#", col_names = FALSE, col_select = c(6,7,8,9))
+hg38_canonical <- hg38_canonical %>% rename("uniprot_ID" = "X6", "am_ID" = "X7", "change" = "X8", "score" = "X9")
+hg38_rematched_to_add <- hg38_rematched_to_add %>% inner_join(hg38_canonical, by = "am_ID")
+hg38_rematched_to_add <- hg38_rematched_to_add %>% select(`ID`, `change`, `score`)
+am_full <- rows_insert(am_full, hg38_rematched_to_add)
+# 210,329,860 variants; 19,209 transcripts
+# VM with 128GB RAM
+```
+
+I then compared the full and partial sets to see which transcripts weren't present in both:
+
+```R
+am_full <- read_tsv("am_full.tsv.gz")
+am_full <- am_full %>% select(ID)
+am_full <- unique(am_full)
+am <- read_tsv("am.tsv.gz")
+am <- am %>% select(ID)
+am <- unique(am)
+am_full_not_am <- am_full %>% anti_join(am, by = "ID")
+write_tsv(am_full_not_am, "am_full_not_am.tsv")
+am_not_am_full <- am %>% anti_join(am_full, by = "ID")
+write_tsv(am_not_am_full, "am_not_am_full.tsv")
+# 1 transcript in am not am_full; 211 transcripts in am_full not am
+# VM with 128GB RAM
+```
+
+Although the 'partial' set contains 'scores for every amino acid change that it is possible to produce with a single nucleotide change' and the 'full' set contains 'scores for every possible amino acid change at every position', it's acceptable for the completeness that the 'partial' set contains a few proteins with full sets of scores and the 'full' set contains a few proteins with partial sets of scores.
+
+```R
+am_full <- read_tsv("am_full.tsv.gz")
+am <- read_tsv("am.tsv.gz")
+am_full_not_am <- am_full_not_am %>% inner_join(am_full, by = "ID")
+write_tsv(am_full_not_am, "am_full_not_am.tsv")
+am_not_am_full <- am_not_am_full %>% inner_join(am, by = "ID")
+write_tsv("am_not_am_full.tsv")
+am <- rows_insert(am, am_full_not_am)
+am_full <- rows_insert(am_full, am_not_am_full)
+write_tsv(am, "am1.tsv.gz")
+write_tsv(am_full, "am_full1.tsv.gz")
+# am1.tsv.gz (376.4MB) contains 19,210 transcripts and 66,426,471 variants
+# am_full1.tsv.gz (1.1GB) contains 19,210 transcripts and 210,335,478 variants
+# VM with 128GB RAM
+```
+
+Finally, I added the additional transcript nucleotide sequences to the reference set:
+
+```R
+am_full <- read_tsv("am_full1.tsv.gz")
+am_full <- am_full %>% select(`ID`)
+am_full <- unique(am_full)
+reference <- read_tsv("reference_transcripts_full.tsv")
+reference <- am_full %>% inner_join(reference, by = "ID")
+df <- read_tsv("df.tsv")
+extra <- am_full %>% filter(!`ID` %in% reference$ID)
+extra <- extra %>% inner_join(df, by = "ID")
+reference <- rows_insert(reference, extra)
+write_tsv(reference, "reference1.tsv")
+# 19,210 reference sequences; 33,257,151 nucleotides
+# VM with 128GB RAM
+```
 
 ### data generation
 
