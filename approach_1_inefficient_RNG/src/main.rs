@@ -1,32 +1,10 @@
 use csv::ReaderBuilder;
 use rand::Rng;
 use std::fs::OpenOptions;
+use std::collections::HashMap;
 use std::io::prelude::*;
 
-// download reference transcriptome from https://storage.googleapis.com/am_data_transfer_test1/reference1.tsv
-// download full AlphaMissense dataset from https://storage.googleapis.com/am_data_transfer_test1/am1.tsv.gz
-// download partial AlphaMissense dataset from https://storage.googleapis.com/am_data_transfer_test1/am1.tsv.gz
-
-struct RowData {
-    run_number: u32,
-    id: String,
-    sequence: String,
-}
-
-struct Substitutions {
-    run_number: u32,
-    id: String,
-    sequence: String,
-    substituted_positions: Vec<u32>
-}
-
-struct SubstitutedSequences {
-    run_number: u32,
-    id: String,
-    original_sequence: String,
-    substituted_sequence: String,
-    substituted_positions: Vec<u32>
-}
+mod datagen;
 
 struct Codons {
     run_number: u32,
@@ -36,205 +14,299 @@ struct Codons {
     substituted_codon: String
 }
 
+struct OriginalTranslations {
+    run_number: u32,
+    id: String,
+    original_codon: String,
+    original_translation: String,
+    codon_number: u32,
+    substituted_codon: String,
+}
+
+struct SubstitutedTranslations {
+    run_number: u32,
+    id: String,
+    original_codon: String,
+    original_translation: String,
+    codon_number: u32,
+    substituted_codon: String,
+    substituted_translation: String,
+}
+
+
+struct Flags {
+    run_number: u32,
+    id: String,
+    original_codon: String,
+    original_translation: String,
+    codon_number: u32,
+    substituted_codon: String,
+    substituted_translation: String,
+    flag: String
+}
+
 fn main() {
-    parse_run(1);
-}
-
-fn parse_run(num_of_times: u32) {
-
-    // call parse_file a specified number of times
-    // count the run number
-    // pass parse_file the run number
     
-    let mut run_number: u32 = 0;
-    for _ in 0..num_of_times {
-        run_number += 1;
-        parse_file(run_number);
-    }
+    // datagen::parse_run(2);
+    process_codons_file();
 
 }
 
-fn parse_file(run_number: u32) {
+fn process_codons_file () {
 
-    // parse the reference transcript file line-by-line and pass to the parse_sequence function
+    let original_codon_lookup_table = load_original_codon_lookup();
+    let substituted_codon_lookup_table = load_substituted_codon_lookup();
+    parse_codon_output(&original_codon_lookup_table, &substituted_codon_lookup_table);
+    
+}
 
-    let file_path = "reference1.tsv";
-    let mut reader = ReaderBuilder::new().delimiter(b'\t').has_headers(true).from_path(file_path).unwrap();
+fn load_original_codon_lookup () -> HashMap<String, String> {
+
+    // load the codon lookup table from a file called "codon_table1.tsv"
+    // the file is tab separated with columns for codon and translation.
+    // store the data in a HashMap called "original_codon_lookup"
+
+    let mut original_codon_lookup_table: HashMap<String, String> = HashMap::new();
+
+    let file_path = "codon_table1.txt";
+    let mut reader = ReaderBuilder::new().delimiter(b'\t').has_headers(false).from_path(file_path).unwrap();
 
     for result in reader.records() {
         let record = result.unwrap();
-        if record.len() < 2 {
+        if record.len() < 1 {
             continue;
         }
-        let id = record[0].to_string();
-        let sequence = record[1].to_string();
-        let row_data = RowData {
-            run_number,
-            id,
-            sequence,
-        };
-        parse_sequence(row_data); // This is a blocking call. It will wait until parse_sequence has completed.
+        let codon = record[0].to_string();
+        let translation = record[1].to_string();
+        original_codon_lookup_table.insert(codon, translation);
     }
+
+    return original_codon_lookup_table;
+
 }
 
-fn parse_sequence (row_data: RowData) {
-    
-    let mut substitutions = Substitutions {
-        run_number: row_data.run_number,
-        id: row_data.id.clone(),
-        sequence: row_data.sequence.clone(),
-        substituted_positions: Vec::new(),
-    };
 
-    for (i, character) in row_data.sequence.chars().enumerate() {
-        match character {
-            'A' => {
-                if r_n_g() < 0.0001 {
-                    substitutions.substituted_positions.push(i as u32);
-                }
-            },
-            'T' => {
-                if r_n_g() < 0.0002 {
-                    substitutions.substituted_positions.push(i as u32);
-                }
-            },
-            'G' => {
-                if r_n_g() < 0.0003 {
-                    substitutions.substituted_positions.push(i as u32);
-                }
-            },
-            'C' => {
-                if r_n_g() < 0.0004 {
-                    substitutions.substituted_positions.push(i as u32);
-                }
-            },
-            _ => println!("Warning: Unexpected character {} at position {}", character, i),
+fn load_substituted_codon_lookup () -> HashMap<String, String> {
+
+    // load the codon lookup table from a file called "codon_table1.tsv"
+    // the file is tab separated with columns for codon and translation.
+    // store the data in a HashMap called "original_codon_lookup"
+
+    let mut substituted_codon_lookup_table: HashMap<String, String> = HashMap::new();
+
+    let file_path = "inosine_codon_table_IisG.txt";
+    let mut reader = ReaderBuilder::new().delimiter(b'\t').has_headers(false).from_path(file_path).unwrap();
+
+    for result in reader.records() {
+        let record = result.unwrap();
+        if record.len() < 1 {
+            continue;
         }
+        let codon = record[0].to_string();
+        let translation = record[1].to_string();
+        substituted_codon_lookup_table.insert(codon, translation);
     }
 
-    if !substitutions.substituted_positions.is_empty() {
-        substitute_sequence(substitutions);
-    }
-    // iterate character-by-character through the sequence, calling the RNG to determine if a substitution is made at each position
-    // store run number, ID, corresponding sequence, and substituted positions in a data structure called "substitutions"
-    // call parseFile when the end of the sequence is reached
-    // pass the data structure to the substituteSequence function if a substitution is made at any position.
+    return substituted_codon_lookup_table;
 
 }
-
-fn r_n_g () -> f64 {
-    
-    // generate a random number between 0 and 1
-    // return the number
-    // this is a separate function to allow for the RNG to be swapped-out if desired
-    
-    let mut rng = rand::thread_rng();
-    return rng.gen::<f64>();
-}
-
-fn substitute_sequence (substitutions: Substitutions) {
-
-    let mut substituted_sequence = substitutions.sequence.clone();
-
-    let substituted_positions = substitutions.substituted_positions.clone(); // Clone the substituted_positions vector
-
-    for position in substitutions.substituted_positions {
-        let index = position as usize;
-        substituted_sequence.replace_range(index..index+1, "I");
-    }
-
-    let substituted_sequences = SubstitutedSequences {
-        run_number: substitutions.run_number,
-        id: substitutions.id.clone(),
-        original_sequence: substitutions.sequence,
-        substituted_sequence,
-        substituted_positions,
-    };
-
-    extract_codons(substituted_sequences);
     
     
-    // copy the sequence from the substitutions data structure
-    // substitute the character at each specified position with an 'I'
-    // store the original and substituted sequences in the data structure called "SubstitutedSequences"
-    // pass the SubstitutedSequences data to the extract_codons function
+fn parse_codon_output (original_codon_lookup_table: &HashMap<String, String>, substituted_codon_lookup_table: &HashMap<String, String>) {
 
-}
+    // parse the codon_output file and print the contents to the console
 
-fn extract_codons (substituted_sequences: SubstitutedSequences) {
+    let file_path = "codon_output.tsv";
+    let mut reader = ReaderBuilder::new().delimiter(b'\t').has_headers(false).from_path(file_path).unwrap();
 
-    let mut codons_vec: Vec<Codons> = Vec::new();
-
-    for &position in &substituted_sequences.substituted_positions {
-        let codon_number = ((position as f64 + 1f64) / 3f64).ceil() as u32;
-
-        let original_codon_start = if ((position as f64 + 1f64) / 3f64) % 3f64 == 0.0 { position - 2 } else { position - position % 3 };
-        let original_codon_end = original_codon_start + 3;
-        let original_codon = substituted_sequences.original_sequence[original_codon_start as usize..original_codon_end as usize].to_string();
-
-        let substituted_codon_start = if ((position as f64 + 1f64) / 3f64) % 3f64 == 0.0 { position - 2 } else { position - position % 3 };
-        let substituted_codon_end = substituted_codon_start + 3;
-        let substituted_codon = substituted_sequences.substituted_sequence[substituted_codon_start as usize..substituted_codon_end as usize].to_string();
+    for result in reader.records() {
+        let record = result.unwrap();
+        if record.len() < 4 {
+            continue;
+        }
+        
+        let run_number = record[0].parse::<u32>().unwrap();
+        let id = record[1].to_string();
+        let original_codon = record[2].to_string();
+        let codon_number = record[3].parse::<u32>().unwrap();
+        let substituted_codon = record[4].to_string();
 
         let codon = Codons {
-            run_number: substituted_sequences.run_number,
-            id: substituted_sequences.id.clone(),
+            run_number,
+            id,
             original_codon,
             codon_number,
             substituted_codon,
         };
 
-        codons_vec.push(codon);
-    }
-
-    impl PartialEq for Codons {
-        fn eq(&self, other: &Self) -> bool {
-            // Implement the equality comparison logic for Codons struct
-            // Return true if the two Codons are equal, false otherwise
-            // You need to compare all the fields of Codons struct for equality
-            self.run_number == other.run_number &&
-            self.id == other.id &&
-            self.original_codon == other.original_codon &&
-            self.codon_number == other.codon_number &&
-            self.substituted_codon == other.substituted_codon
+        let original_translation: OriginalTranslations = original_codon_lookup(codon, &original_codon_lookup_table);
+        let substituted_translation: SubstitutedTranslations = substituted_codon_lookup(original_translation, &substituted_codon_lookup_table);
+        if let Some(non_synonymous_translation) = remove_synonymous(substituted_translation) {
+            select_missense(non_synonymous_translation);
         }
+
     }
 
-    codons_vec.dedup();
+    // call original_codon_lookup function with change
+}
 
-    for codon in codons_vec {
-        write_codon_output(codon);
+
+fn original_codon_lookup (codon: Codons, original_codon_lookup: &HashMap<String, String>) -> OriginalTranslations {
+
+    
+    let original_translation = match original_codon_lookup.get(&codon.original_codon) {
+        Some(translation) => translation.clone(),
+        None => {
+            eprintln!("Error: Original codon not found in lookup table");
+            "".to_string()
+        }
+    };
+
+    OriginalTranslations {
+        run_number: codon.run_number,
+        id: codon.id.clone(),
+        original_codon: codon.original_codon.clone(),
+        original_translation,
+        codon_number: codon.codon_number,
+        substituted_codon: codon.substituted_codon.clone(),
     }
+    
+    // return original_translation
 
-    // iterate through the original sequence, extracting the codon at each substituted position
-    // the codon is 3 characters long and starts two characters before a substituted position perfectly divisible by 3
-    // without a remainder. It starts at one character before a substituted position with a remainder of 2, and at a 
-    // the same position as a substituted position with a remainder of 1.
-    // the 'codon number' is the floored integer division of the substituted position by 3
-    // iterate through the substituted sequence, extracting the codon at each substituted position
-    // store the original and substituted codons in a data structure called "codons"
-    // the "codons" data structure should contain the run numbers, IDs, original codons, codon numbers and substituted codons.
-    // 
-    // note that where two characters in the same codon are substituted, duplicate entries will be made in the "codons" data structure.
-    // duplicate entries should be removed before the data structure is passed to the writeCodonOutput function.
+}
+
+
+fn substituted_codon_lookup (original_translation: OriginalTranslations, substituted_codon_lookup: &HashMap<String, String>) -> SubstitutedTranslations {
+
+    let substituted_translation = match substituted_codon_lookup.get(&original_translation.substituted_codon) {
+        Some(translation) => translation.clone(),
+        None => {
+            // Call the determine_substituted_codon function when the translation is not found
+            determine_translation(&original_translation.substituted_codon)
+
+        }
+    };
+
+
+    SubstitutedTranslations {
+        run_number: original_translation.run_number,
+        id: original_translation.id.clone(),
+        original_codon: original_translation.original_codon.clone(),
+        original_translation: original_translation.original_translation.clone(),
+        codon_number: original_translation.codon_number,
+        substituted_codon: original_translation.substituted_codon.clone(),
+        substituted_translation: substituted_translation,
+    }
 
 }
 
 
 
-fn write_codon_output (codon: Codons) {
+fn determine_translation (substituted_codon: &String) -> String {
 
-    // write the "codons" data structure to a file called "codon_output.txt"
-    // the file should be tab separated with columns for run number, ID, original codon, codon number and substituted codon.
+    // determine the substituted codon when the translation is not found in the lookup table
+    // return the substituted codon
+    let translation: String = "unknown".to_string();
+
+    return translation;
+
+}
+
+
+fn remove_synonymous(substituted_translation: SubstitutedTranslations) -> Option<SubstitutedTranslations> {
+    // Check if the original and substituted translations are different
+    if substituted_translation.original_translation != substituted_translation.substituted_translation {
+        // If they are different, return the struct
+        Some(substituted_translation)
+    } else {
+        // If they are the same, return None
+        None
+    }
+}
+
+
+fn select_missense (non_synonymous_translation: SubstitutedTranslations) {
+    
+    let mut flag = String::new();
+
+    if non_synonymous_translation.codon_number == 1 {
+        flag = "STARTLOSS".to_string();
+    } else if non_synonymous_translation.original_translation == "*" {
+        flag = "STOPLOSS".to_string();
+    } else if non_synonymous_translation.substituted_translation == "*" {
+        flag = "NONSENSE".to_string();
+    } else if non_synonymous_translation.substituted_translation == "#" {
+        flag = "STALL".to_string();
+    } else {
+        flag = "MISSENSE".to_string();
+    }
+
+    let flag = Flags {
+        run_number: non_synonymous_translation.run_number,
+        id: non_synonymous_translation.id.clone(),
+        original_codon: non_synonymous_translation.original_codon.clone(),
+        original_translation: non_synonymous_translation.original_translation.clone(),
+        codon_number: non_synonymous_translation.codon_number,
+        substituted_codon: non_synonymous_translation.substituted_codon.clone(),
+        substituted_translation: non_synonymous_translation.substituted_translation.clone(),
+        flag,
+    };
+
+    if flag.flag == "MISSENSE" {
+        write_missense_changes(flag);
+    } else {
+        write_other_changes(flag);
+    }
+
+}
+
+
+fn write_missense_changes (flag: Flags) {
 
     let mut file = OpenOptions::new()
         .write(true)
         .create(true) // Create the file if it doesn't exist
         .append(true)
-        .open("codon_output.tsv")
+        .open("missense_changes.tsv")
         .unwrap();
 
-    if let Err(e) = writeln!(file, "{}\t{}\t{}\t{}\t{}", codon.run_number, codon.id, codon.original_codon, codon.codon_number, codon.substituted_codon) {
+    let change = format!("{}{}{}", flag.original_translation, flag.codon_number, flag.substituted_translation);
+
+    if let Err(e) = writeln!(file, "{}\t{}\t{}",
+    flag.run_number,
+    flag.id,
+    change,
+    ) {
         eprintln!("Couldn't write to file: {}", e);
     }
+
+}
+
+
+fn write_other_changes (flag: Flags) {
+
+    // write the "other_changes" data to a file called "other_changes.tsv"
+    // the file is tab separated with columns for run number, ID, original translation, substituted translation, and flag.
+    
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true) // Create the file if it doesn't exist
+        .append(true)
+        .open("other_changes.tsv")
+        .unwrap();
+
+    if let Err(e) = writeln!(file, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+    flag.run_number,
+    flag.id,
+    flag.original_codon,
+    flag.original_translation,
+    flag.codon_number,
+    flag.substituted_codon,
+    flag.substituted_translation,
+    flag.flag,
+    ) {
+        eprintln!("Couldn't write to file: {}", e);
+    }
+
+    
 }
