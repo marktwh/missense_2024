@@ -107,22 +107,22 @@ fn parse_sequence (row_data: RowData) {
     for (i, character) in row_data.sequence.chars().enumerate() {
         match character {
             'A' => {
-                if r_n_g() < 0.000269 {
+                if r_n_g() < 0.00106322 {
                     substitutions.substituted_positions.push(i as u32);
                 }
             },
             'T' => {
-                if r_n_g() < 0.000242 {
+                if r_n_g() < 0.00096724 {
                     substitutions.substituted_positions.push(i as u32);
                 }
             },
             'G' => {
-                if r_n_g() < 0.001335 {
+                if r_n_g() < 0.00533984 {
                     substitutions.substituted_positions.push(i as u32);
                 }
             },
             'C' => {
-                if r_n_g() < 0.000589 {
+                if r_n_g() < 0.0023577 {
                     substitutions.substituted_positions.push(i as u32);
                 }
             },
