@@ -1,7 +1,7 @@
 use csv::ReaderBuilder;
-use rand::Rng;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
+use crate::r_n_g;
 
 // download reference transcriptome from https://storage.googleapis.com/am_data_transfer_test1/reference1.tsv
 // download full AlphaMissense dataset from https://storage.googleapis.com/am_data_transfer_test1/am1.tsv.gz
@@ -37,14 +37,7 @@ struct Codons {
 }
 
 
-fn main() {
-    
-    parse_run(2);
- 
-}
-
-
-fn parse_run(num_of_times: u32) {
+pub fn parse_run(num_of_times: u32) {
 
     // call parse_file a specified number of times
     // count the run number
@@ -136,17 +129,6 @@ fn parse_sequence (row_data: RowData) {
         substitute_sequence(substitutions);
     }
     
-}
-
-
-fn r_n_g () -> f64 {
-    
-    // generate a random number between 0 and 1
-    // return the number
-    // this is a separate function to allow for the RNG to be swapped-out if desired
-    
-    let mut rng = rand::thread_rng();
-    return rng.gen::<f64>();
 }
 
 
