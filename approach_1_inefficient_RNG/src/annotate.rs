@@ -52,7 +52,7 @@ fn parse_codon_output (original_codon_lookup_table: &HashMap<String, String>, su
 
     // parse the codon_output file and print the contents to the console
 
-    let file_path = "codon_output.tsv";
+    let file_path = "codon_output_toy.tsv";
     let mut reader = ReaderBuilder::new().delimiter(b'\t').has_headers(false).from_path(file_path).unwrap();
 
     for result in reader.records() {
@@ -193,7 +193,7 @@ fn write_missense_changes (flag: Flags) {
         .write(true)
         .create(true) // Create the file if it doesn't exist
         .append(true)
-        .open("missense_changes.tsv")
+        .open("missense_changes_toy.tsv")
         .unwrap();
 
     let change = format!("{}{}{}", flag.original_translation, flag.codon_number, flag.substituted_translation);
@@ -218,7 +218,7 @@ fn write_other_changes (flag: Flags) {
         .write(true)
         .create(true) // Create the file if it doesn't exist
         .append(true)
-        .open("other_changes.tsv")
+        .open("other_changes_toy.tsv")
         .unwrap();
 
     if let Err(e) = writeln!(file, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -247,7 +247,7 @@ fn write_archive (flag: Flags) {
         .write(true)
         .create(true) // Create the file if it doesn't exist
         .append(true)
-        .open("archive.tsv")
+        .open("archive_toy.tsv")
         .unwrap();
 
     if let Err(e) = writeln!(file, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -316,15 +316,4 @@ fn load_substituted_codon_lookup () -> HashMap<String, String> {
 
     return substituted_codon_lookup_table;
 
-}
-    
-    
-pub fn r_n_g () -> f64 {
-    
-    // generate a random number between 0 and 1
-    // return the number
-    // this is a separate function to allow for the RNG to be swapped-out if desired
-    
-    let mut rng = rand::thread_rng();
-    return rng.gen::<f64>();
 }

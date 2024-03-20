@@ -1,15 +1,13 @@
-use csv::ReaderBuilder;
 use rand::Rng;
-use std::fs::OpenOptions;
-use std::collections::HashMap;
-use std::io::prelude::*;
 use datagen::*;
 use annotate::*;
-use determine_translation::*;
+use am_lookup::*;
+use std::error::Error;
 
 mod datagen;
 mod annotate;
 mod determine_translation;
+mod am_lookup;
 
 pub struct Codons {
     run_number: u32,
@@ -21,8 +19,9 @@ pub struct Codons {
 
 fn main() {
     
-    // parse_run(2);
-    process_codons_file();
+    // parse_run(10);
+    // process_codons_file();
+    am_lookup();
 
 }
 
@@ -36,3 +35,6 @@ pub fn r_n_g () -> f64 {
     let mut rng = rand::thread_rng();
     return rng.gen::<f64>();
 }
+
+
+

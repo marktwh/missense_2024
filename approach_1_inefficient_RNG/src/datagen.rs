@@ -4,7 +4,7 @@ use std::io::prelude::*;
 use crate::r_n_g;
 
 // download reference transcriptome from https://storage.googleapis.com/am_data_transfer_test1/reference1.tsv
-// download full AlphaMissense dataset from https://storage.googleapis.com/am_data_transfer_test1/am1.tsv.gz
+// download full AlphaMissense dataset from https://storage.googleapis.com/am_data_transfer_test1/am_full1.tsv.gz
 // download partial AlphaMissense dataset from https://storage.googleapis.com/am_data_transfer_test1/am1.tsv.gz
 
 struct RowData {
@@ -57,7 +57,7 @@ fn parse_file(run_number: u32) {
 
     // parse the reference transcript file line-by-line and pass to the parse_sequence function
 
-    let file_path = "reference1.tsv";
+    let file_path = "reference_toy.tsv";
     let mut reader = ReaderBuilder::new().delimiter(b'\t').has_headers(true).from_path(file_path).unwrap();
 
     for result in reader.records() {
@@ -223,7 +223,7 @@ fn write_codon_output (codon: Codons) {
         .write(true)
         .create(true) // Create the file if it doesn't exist
         .append(true)
-        .open("codon_output.tsv")
+        .open("codon_output_toy.tsv")
         .unwrap();
 
     if let Err(e) = writeln!(file, "{}\t{}\t{}\t{}\t{}", codon.run_number, codon.id, codon.original_codon, codon.codon_number, codon.substituted_codon) {
